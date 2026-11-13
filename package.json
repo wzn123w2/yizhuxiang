@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "山寺 · 静静坐一会儿（本地重建版）",
+  "description": "一炷香 · 山寺里坐一会儿（本地重建版）",
   "scripts": {
     "dev": "vite --host",
     "server": "node server/index.mjs",

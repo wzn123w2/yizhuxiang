@@ -73,7 +73,7 @@ function serveStatic(req, res) {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(
-      '山寺 · 同修服务器已启动（WebSocket 在 /ws）\n\n' +
+      '一炷香 · 同修服务器已启动（WebSocket 在 /ws）\n\n' +
         '还没有构建前端。开发用 vite 打开，或先构建：\n\n' +
         '  npm run build && npm run serve\n\n',
     );
@@ -308,7 +308,7 @@ setInterval(() => {
 }, 20_000);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.info(`山寺 · 同修服务器 http://0.0.0.0:${PORT}  (ws: /ws)`);
+  console.info(`一炷香 · 同修服务器 http://0.0.0.0:${PORT}  (ws: /ws)`);
   if (fs.existsSync(path.join(DIST, 'index.html'))) {
     console.info(`静态站点: ${DIST}`);
   } else {
