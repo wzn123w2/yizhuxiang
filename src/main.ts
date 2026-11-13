@@ -1,0 +1,1254 @@
+import './style.css';
+import * as THREE from 'three';
+
+import { buildTemple, type Temple, type Cushion } from './world/temple';
+import { Monk, type Pose } from './world/monk';
+import { Controls } from './game/controls';
+import { AudioHost } from './audio/engine';
+import { Sounds, Wind, Chant } from './audio/sounds';
+import { BeadsUI } from './ui/beads';
+import { NetClient, type NetEventKind, type RemoteInfo } from './net/client';
+import { RemotePlayer } from './net/remote';
+import * as store from './core/save';
+import { randomDharmaName } from './core/name';
+
+// ————————————————————————————— DOM
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const canvas = $<HTMLCanvasElement>('scene');
+const loadingEl = $('loading');
+const loadBar = $('load-bar');
+const loadTip = $('load-tip');
+const welcomeEl = $('welcome');
+const btnStart = $<HTMLButtonElement>('btn-start');
+
+const topbar = $('topbar');
+const meter = $('meter');
+const actionsBar = $('actions');
+const stick = $('stick');
+const daynightEl = $('daynight');
+const meritEl = $('merit');
+const beadsCountEl = $('beads-count');
+const onlineEl = $('online');
+const nameInput = $<HTMLInputElement>('name-input');
+const btnDice = $<HTMLButtonElement>('btn-dice');
+
+const btnSound = $<HTMLButtonElement>('btn-sound');
+const btnService = $<HTMLButtonElement>('btn-service');
+const btnSettings = $<HTMLButtonElement>('btn-settings');
+const settingsEl = $('settings');
+
+const fishPanel = $('fish-panel');
+const fishIcon = fishPanel.querySelector('.fish-icon') as HTMLElement;
+const fishFill = $('fish-fill');
+const fishCountEl = $('fish-count');
+const btnFishClose = $<HTMLButtonElement>('fish-close');
+
+const beadPanel = $('bead-panel');
+const beadCanvas = $<HTMLCanvasElement>('bead-canvas');
+const btnBeadClose = $<HTMLButtonElement>('bead-close');
+const btnBeadAuto = $<HTMLButtonElement>('bead-auto');
+
+const floaters = $('floaters');
+const toastEl = $('toast');
+
+const UP = new THREE.Vector3(0, 1, 0);
+/** 殿内宽度的一半（与 temple.ts 的 HALL_HW 对应），用来判断"是否在殿内" */
+const HALL_HALF_W = 12;
+/** 殿外的相机高度上限：取一个够大的数，好让殿内外的切换能插值过渡 */
+const CAMY_FREE = 40;
+let camYLimit: number | null = null;
+
+// ————————————————————————————— 渲染器
+
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070b11);
+
+// ————————————————————————————— 存档
+
+let { save, state: storageState } = store.load();
+
+let merit = save.merit;
+
+// ————————————————————————————— 相机 / 控制
+
+let temple: Temple;
+let monk: Monk;
+
+const controls = new Controls(
+  canvas,
+  {
+    onTap: (x, y) => onTap(x, y),
+    onDrag: () => hideHint(),
+    onHover: (x, y) => onHover(x, y),
+  },
+  stick,
+);
+const camera = controls.camera;
+
+// ————————————————————————————— 音频（延迟到最后一步创建，但先留声明）
+
+let host: AudioHost;
+let sounds: Sounds;
+let wind: Wind;
+let chant: Chant;
+let audioOn = false;
+let beadsUI: BeadsUI;
+
+const log = (m: string) => console.info('[audio]', m);
+
+// ————————————————————————————— 状态
+
+let sitting: Cushion | null = null;
+let moveTarget: THREE.Vector3 | null = null;
+let pendingSeat: Cushion | null = null;
+let pendingIncense = false;
+
+let bowing = false;
+let tempPose: { pose: Pose; until: number } | null = null;
+let movedThisFrame = false;
+let lastPose: Pose | null = null;
+
+let beadOpen = false;
+let lastKnock = 0;
+let malletHitAt = 0;
+
+/** 自动木鱼：开着就按节拍自己敲 */
+let fishAuto = false;
+/** 下一拍的时刻 */
+let fishNext = 0;
+/** 本次连敲了多少下 */
+let fishSession = 0;
+
+// ————————————————————————————— 同修（联机）
+
+let net: NetClient | null = null;
+/** 别人：id -> RemotePlayer */
+const remotes = new Map<string, RemotePlayer>();
+/** 别人占着的蒲团：seatIndex -> id */
+const remoteSeats = new Map<number, string>();
+/** 本机占着的蒲团 */
+let mySeat: number | null = null;
+/** 服务器时间与本机的差，让昼夜在所有人眼里一致 */
+let linkToastShown = false;
+
+/** 蒲团高亮的拾取目标，build 时填好 */
+let cushionGroups: THREE.Object3D[] = [];
+/** 当前高亮着的那张（正在走过去 / 已坐） */
+let activeCushion: Cushion | null = null;
+let hoverCushion: Cushion | null = null;
+
+// 手持木鱼
+const handFish = new THREE.Group();
+let handMallet!: THREE.Mesh;
+
+// ————————————————————————————— 工具
+
+function toast(text: string) {
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  window.clearTimeout((toast as any)._t);
+  (toast as any)._t = window.setTimeout(() => toastEl.classList.remove('show'), 2600);
+}
+
+function floater(world: THREE.Vector3, text: string) {
+  const v = world.clone().project(camera);
+  const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  if (x < -80 || x > window.innerWidth + 80) return;
+
+  const el = document.createElement('div');
+  el.className = 'floater';
+  el.textContent = text;
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+  floaters.appendChild(el);
+  window.setTimeout(() => el.remove(), 1300);
+}
+
+function pickCushionAt(clientX: number, clientY: number): Cushion | null {
+  if (!cushionGroups.length) return null;
+  const ndc = new THREE.Vector2(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(cushionGroups, true)[0];
+  if (!hit) return null;
+
+  let o: THREE.Object3D | null = hit.object;
+  while (o && o.userData.cushionIndex === undefined) o = o.parent;
+  if (o) return temple.cushions[o.userData.cushionIndex as number] ?? null;
+
+  let best: Cushion | null = null;
+  let bd = Infinity;
+  for (const c of temple.cushions) {
+    const d = c.seat.distanceToSquared(hit.point);
+    if (d < bd) {
+      bd = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/** 悬停：桌面端鼠标经过蒲团时给一点提示 */
+function onHover(clientX: number, clientY: number) {
+  const c = sitting || moveTarget ? null : pickCushionAt(clientX, clientY);
+  if (c === hoverCushion) return;
+  if (hoverCushion) hoverCushion.hover = 0;
+  hoverCushion = c;
+  if (c) c.hover = 1;
+  canvas.style.cursor = c ? 'pointer' : '';
+}
+
+function setActiveCushion(c: Cushion | null) {
+  if (activeCushion === c) return;
+  if (activeCushion) activeCushion.hold = 0;
+  activeCushion = c;
+  if (c) c.hold = 1;
+}
+
+function hideHint() {
+  // 拖动镜头时把 toast 收掉，避免挡视线
+  toastEl.classList.remove('show');
+}
+
+function inWalk(x: number, z: number): boolean {
+  for (const r of temple.walkRects) {
+    if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) return true;
+  }
+  return false;
+}
+
+/** 把点收到最近的可行走矩形里（用于"走到某处"的目标点） */
+function clampToWalk(p: THREE.Vector3): THREE.Vector3 {
+  if (inWalk(p.x, p.z)) return p;
+  let bx = p.x;
+  let bz = p.z;
+  let bd = Infinity;
+  for (const r of temple.walkRects) {
+    const cx = Math.min(Math.max(p.x, r.x0), r.x1);
+    const cz = Math.min(Math.max(p.z, r.z0), r.z1);
+    const d = (cx - p.x) ** 2 + (cz - p.z) ** 2;
+    if (d < bd) {
+      bd = d;
+      bx = cx;
+      bz = cz;
+    }
+  }
+  p.x = bx;
+  p.z = bz;
+  return p;
+}
+
+/**
+ * 移动解算：先按"墙"做轴分离滑动（贴墙走不会卡住），再按圆形障碍推开。
+ * 返回是否真的移动了。
+ */
+function resolveMove(px: number, pz: number, nx: number, nz: number): [number, number] {
+  let x = nx;
+  let z = nz;
+
+  if (!inWalk(x, z)) {
+    if (inWalk(x, pz)) z = pz;
+    else if (inWalk(px, z)) x = px;
+    else {
+      x = px;
+      z = pz;
+    }
+  }
+
+  for (const o of temple.obstacles) {
+    const dx = x - o.x;
+    const dz = z - o.z;
+    const d = Math.hypot(dx, dz);
+    if (d < o.r && d > 1e-4) {
+      const tx = o.x + (dx / d) * o.r;
+      const tz = o.z + (dz / d) * o.r;
+      if (inWalk(tx, tz)) {
+        x = tx;
+        z = tz;
+      } else {
+        x = px;
+        z = pz;
+      }
+    }
+  }
+
+  return [x, z];
+}
+
+// ————————————————————————————— 启动
+
+async function boot() {
+  loadBar.style.width = '18%';
+  loadTip.textContent = '正在打扫庭院…';
+  await tick();
+
+  temple = buildTemple(scene, renderer);
+  // 给坐垫的所有子网格打上索引，射线拾取时才能向上找到是哪一张
+  temple.cushions.forEach((c, i) => {
+    c.mesh.parent?.traverse((o) => {
+      o.userData.cushionIndex = i;
+    });
+  });
+  cushionGroups = temple.cushions.map((c) => c.mesh.parent!).filter(Boolean);
+  loadBar.style.width = '52%';
+  loadTip.textContent = '正在点亮佛前的灯…';
+  await tick();
+
+  monk = new Monk();
+  // 初始站在庭院里、正对佛堂（佛堂在 -z 方向）
+  const startZ = 20.5;
+  monk.root.position.set(0, temple.groundHeightAt(0, startZ), startZ);
+  monk.setFacing(Math.PI);
+  scene.add(monk.root);
+
+  // 镜头也跟着一开始就对好，避免开场时"从佛堂外面一路飘过来"
+  controls.focus.copy(monk.root.position).add(new THREE.Vector3(0, 1.02, 0));
+
+  buildHandWoodfish();
+
+  loadBar.style.width = '76%';
+  loadTip.textContent = '正在备好木鱼与念珠…';
+  await tick();
+
+  beadsUI = new BeadsUI(beadCanvas, {
+    onTick: () => {
+      sounds.bead();
+      save.beads = beadsUI.count;
+      beadsCountEl.textContent = String(save.beads);
+      net?.event('bead');
+    },
+    onRound: () => {
+      sounds.bell(196, 1);
+      toast('一圈圆满 · 108');
+      net?.event('round');
+    },
+  });
+  beadsUI.setTotal(save.beads);
+
+  host = new AudioHost(log);
+  sounds = new Sounds(host);
+  wind = new Wind(host);
+  chant = new Chant(host);
+
+  loadBar.style.width = '92%';
+  loadTip.textContent = '正在点一炷香…';
+  await tick();
+
+  // 先定好尺寸与相机参数，再预编译着色器，避免第一次入画卡顿
+  onResize();
+  renderer.compile(scene, camera);
+
+  loadBar.style.width = '100%';
+  await tick(260);
+
+  loadingEl.classList.remove('show');
+  welcomeEl.classList.add('show');
+
+  meritEl.textContent = String(merit);
+  beadsCountEl.textContent = String(save.beads);
+  updateDayNight();
+
+  // 相机碰撞要用到的遮挡物
+  controls.occluders = temple.occluders;
+
+  applySavedAudioState();
+  // 称呼：首次来给一个法号（骰子可换）；以前存过的直接用自己的
+  nameInput.value = save.name || (save.nameTouched ? '' : randomDharmaName());
+  bindUI();
+  onResize();
+  window.addEventListener('resize', onResize);
+
+  requestAnimationFrame(frame);
+}
+
+const tick = (ms = 40) => new Promise((r) => window.setTimeout(r, ms));
+
+function buildHandWoodfish() {
+  const fish = new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 14, 10),
+    new THREE.MeshStandardMaterial({ color: 0x6f4320, roughness: 0.62 }),
+  );
+  fish.scale.set(1, 0.7, 0.86);
+  fish.castShadow = true;
+  handFish.add(fish);
+
+  const slit = new THREE.Mesh(
+    new THREE.TorusGeometry(0.08, 0.014, 5, 12, Math.PI),
+    new THREE.MeshStandardMaterial({ color: 0x120804, roughness: 0.9 }),
+  );
+  slit.rotation.x = -Math.PI / 2;
+  slit.position.y = 0.055;
+  handFish.add(slit);
+
+  handMallet = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.015, 0.015, 0.24, 6),
+    new THREE.MeshStandardMaterial({ color: 0xa8875e, roughness: 0.7 }),
+  );
+  handMallet.position.set(0.11, 0.13, 0.03);
+  handMallet.rotation.z = -0.75;
+  handFish.add(handMallet);
+
+  // 稍微偏右偏前，从背后也能看到一点，不至于敲了没反应
+  handFish.position.set(0.2, 0.5, 0.38);
+  handFish.visible = false;
+  monk.root.add(handFish);
+}
+
+// ————————————————————————————— 音频状态
+
+function applySavedAudioState() {
+  host.setVolume('amb', save.vol.amb);
+  host.setVolume('chant', save.vol.chant);
+  host.setVolume('sfx', save.vol.sfx);
+
+  (($('vol-amb') as HTMLInputElement).value = String(Math.round(save.vol.amb * 100)));
+  (($('vol-chant') as HTMLInputElement).value = String(Math.round(save.vol.chant * 100)));
+  (($('vol-sfx') as HTMLInputElement).value = String(Math.round(save.vol.sfx * 100)));
+
+  btnSound.textContent = save.muted ? '声音' : '静音';
+  btnSound.classList.toggle('on', !save.muted);
+
+  const note = $('storage-note');
+  note.textContent = storageState.ok
+    ? '累计数只保存在这台设备的浏览器里，换设备或清站点数据后无法恢复。'
+    : `当前无法写入本地存储（${storageState.reason ?? '未知原因'}），本次进度仅暂存。`;
+}
+
+async function enableAudio() {
+  const ok = await host.unlock();
+  if (!ok) {
+    toast('这台设备暂时无法开启声音');
+    return false;
+  }
+  audioOn = true;
+  wind.start();
+  chant.start();
+  host.setAllMuted(false);
+  return true;
+}
+
+async function toggleSound() {
+  if (!audioOn) {
+    const ok = await enableAudio();
+    if (ok) {
+      save.muted = false;
+      store.persist(save);
+      btnSound.textContent = '静音';
+      btnSound.classList.add('on');
+      toast('声音已开启');
+    }
+    return;
+  }
+  save.muted = !save.muted;
+  host.setAllMuted(save.muted);
+  store.persist(save);
+  btnSound.textContent = save.muted ? '声音' : '静音';
+  btnSound.classList.toggle('on', !save.muted);
+  toast(save.muted ? '已静音' : '声音已开启');
+}
+
+// ————————————————————————————— UI 绑定
+
+function bindUI() {
+  btnStart.addEventListener('click', onStart);
+  btnSound.addEventListener('click', toggleSound);
+
+  // 骰子：换一个法号（不动存档，按“开门”时才落盘）
+  btnDice.addEventListener('click', () => {
+    nameInput.value = randomDharmaName(nameInput.value.trim());
+    btnDice.classList.remove('roll');
+    void btnDice.offsetWidth; // 重排一下，让动画能连点重播
+    btnDice.classList.add('roll');
+    window.setTimeout(() => btnDice.classList.remove('roll'), 460);
+  });
+
+  for (const b of Array.from(actionsBar.querySelectorAll('button'))) {
+    b.addEventListener('click', () => {
+      if (!requireSeated()) return;
+      const act = (b as HTMLElement).dataset.act;
+      if (act === 'anjali') doAnjali();
+      if (act === 'bow') toggleBow(b as HTMLButtonElement);
+      if (act === 'woodfish') setFishAuto(!fishAuto);
+      if (act === 'beads') setBeadPanel(!beadOpen);
+    });
+  }
+
+  btnBeadClose.addEventListener('click', () => setBeadPanel(false));
+  btnBeadAuto.addEventListener('click', () => setBeadAuto(!beadsUI.isAuto));
+  btnFishClose.addEventListener('click', () => setFishAuto(false));
+
+  btnSettings.addEventListener('click', () => settingsEl.classList.add('open'));
+  $('btn-settings-close').addEventListener('click', () =>
+    settingsEl.classList.remove('open'),
+  );
+
+  const bindVol = (id: string, key: 'amb' | 'chant' | 'sfx') => {
+    const input = $(id) as HTMLInputElement;
+    input.addEventListener('input', () => {
+      const v = Number(input.value) / 100;
+      save.vol[key] = v;
+      host.setVolume(key, v);
+      if (save.muted && v > 0) {
+        // 拖了滑块说明想听
+        save.muted = false;
+        host.setAllMuted(false);
+        btnSound.textContent = '静音';
+        btnSound.classList.add('on');
+      }
+      store.persist(save);
+    });
+  };
+  bindVol('vol-amb', 'amb');
+  bindVol('vol-chant', 'chant');
+  bindVol('vol-sfx', 'sfx');
+
+  $('btn-reset').addEventListener('click', () => {
+    merit = 0;
+    save.merit = 0;
+    save.beads = 0;
+    meritEl.textContent = '0';
+    beadsCountEl.textContent = '0';
+    beadsUI.setTotal(0);
+    store.persist(save);
+    toast('累计数已清空');
+  });
+
+  btnService.addEventListener('click', () => goIncense());
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'KeyE') {
+      e.preventDefault();
+      if (beadOpen) beadsUI.step(1);
+      else setFishAuto(!fishAuto);
+    }
+    if (e.code === 'Escape') {
+      setBeadPanel(false);
+      settingsEl.classList.remove('open');
+    }
+  });
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden) return;
+    await host.ensureAlive();
+    if (audioOn && host.ctx.state === 'running') {
+      wind.start();
+      chant.start();
+      host.setAllMuted(save.muted);
+    }
+    updateDayNight();
+  });
+
+}
+
+async function onStart() {
+  welcomeEl.classList.add('leave');
+  welcomeEl.classList.remove('show');
+  // 触摸设备靠这个类把摇杆放出来（见 style.css 的 @media (pointer: coarse)）
+  document.body.classList.add('playing');
+  topbar.classList.add('show');
+  meter.classList.add('show');
+  actionsBar.classList.add('show');
+
+  // 这个点击是唯一可靠的手势来源：先解锁上下文
+  const ok = await host.unlock();
+  if (ok) {
+    audioOn = true;
+    wind.start();
+    chant.start();
+    host.setAllMuted(save.muted);
+    if (save.muted) {
+      toast('默认静音 · 右上「声音」可开启');
+    }
+  }
+
+  controls.recenterBehind(monk.root.rotation.y);
+
+  // 同修连线：名字取自首屏输入，留空就叫“无名”
+  const rawName = nameInput.value.replace(/[<>&]/g, '').trim().slice(0, 12);
+  if (rawName !== save.name || !save.nameTouched) {
+    save.name = rawName;
+    save.nameTouched = true;
+    store.persist(save);
+  }
+  if (!net) initNet();
+}
+
+// ————————————————————————————— 昼夜
+
+function updateDayNight() {
+  // 用服务器时间，否则两个人可能一个看到白天一个看到夜里
+  const h = new Date(serverNow()).getHours();
+  const night = h < 6 || h >= 18;
+  temple.setNight(night);
+  daynightEl.textContent = night ? '夜' : '昼';
+}
+
+// ————————————————————————————— 交互动作
+
+const raycaster = new THREE.Raycaster();
+
+function onTap(clientX: number, clientY: number) {
+  const ndc = new THREE.Vector2(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1,
+  );
+  raycaster.setFromCamera(ndc, camera);
+
+  // 1) 坐垫：点中就闪一下，走过去的过程中一直亮着
+  const picked = pickCushionAt(clientX, clientY);
+  if (picked) {
+    picked.flash = 1;
+    sitOn(picked);
+    return;
+  }
+
+  // 2) 香炉
+  if (raycaster.intersectObject(temple.burner, true).length) {
+    goIncense();
+    return;
+  }
+
+  // 3) 木鱼台
+  if (raycaster.intersectObject(temple.woodfishStand, true).length) {
+    knock();
+    toast('功德 +1');
+    return;
+  }
+
+  // 4) 地面（殿内石板 / 庭院草地）
+  const hit = raycaster.intersectObjects(temple.groundMeshes, false)[0];
+  if (hit) walkTo(hit.point.clone());
+}
+
+function standUp() {
+  if (!sitting) return;
+  sitting.occupied = false;
+  sitting = null;
+  if (mySeat !== null) {
+    mySeat = null;
+    net?.claimSeat(null);
+  }
+  monk.root.position.y = 0;
+  bowing = false;
+  tempPose = null;
+  setBeadPanel(false);
+  setFishAuto(false);
+  setActiveCushion(null);
+  actionsBar.classList.remove('seated');
+  const bowBtn = actionsBar.querySelector('[data-act="bow"]');
+  bowBtn?.classList.remove('on');
+}
+
+function walkTo(p: THREE.Vector3) {
+  standUp();
+  setActiveCushion(null);
+  canvas.style.cursor = '';
+  pendingSeat = null;
+  pendingIncense = false;
+  setBeadPanel(false);
+  moveTarget = clampToWalk(p.clone());
+}
+
+function sitOn(c: Cushion) {
+  if (seatTaken(c)) {
+    toast('这张蒲团有人了 · 换一张吧');
+    return;
+  }
+  standUp();
+  setActiveCushion(c);
+  pendingSeat = c;
+  pendingIncense = false;
+  setBeadPanel(false);
+  moveTarget = c.seat.clone();
+}
+
+function goIncense() {
+  standUp();
+  pendingSeat = null;
+  setBeadPanel(false);
+  pendingIncense = true;
+  moveTarget = new THREE.Vector3(temple.burner.position.x + 1.15, 0, temple.burner.position.z + 0.2);
+  toast('走向香炉…');
+}
+
+function arrive() {
+  if (pendingSeat) {
+    sitting = pendingSeat;
+    sitting.occupied = true;
+    monk.root.position.copy(sitting.seat);
+    // 坐垫顶面在 0.23，角色下摆底部在局部 0.01，抬到 0.22 刚好坐上去
+    monk.root.position.y = 0.22;
+    // 坐下就面朝佛坛，跟山寺一致
+    monk.setFacing(Math.PI);
+    pendingSeat = null;
+    actionsBar.classList.add('seated');
+    toast('已坐 · 可合掌、礼佛、敲木鱼、捻念珠');
+    // 跟服务端报备这张蒲团，被占了会被请起来
+    mySeat = seatIndexOf(sitting);
+    net?.claimSeat(mySeat);
+    return;
+  }
+  if (pendingIncense) {
+    setActiveCushion(null);
+    pendingIncense = false;
+    tempPose = { pose: 'incense', until: performance.now() + 2400 };
+    window.setTimeout(() => {
+      temple.addIncense();
+      sounds.incense();
+      net?.event('incense');
+    }, 900);
+    window.setTimeout(() => toast('香已插上 · 可燃两分钟'), 1500);
+  }
+}
+
+let lastStepAt = 0;
+
+function stepTo(dir: THREE.Vector3, dt: number, speed = 2.7) {
+  const t = performance.now();
+  if (t - lastStepAt > 380) {
+    lastStepAt = t;
+    // 极轻的脚步声：踩在石板上的一点摩擦
+    sounds.bead(0.12);
+  }
+
+  const p = monk.root.position;
+  const [nx, nz] = resolveMove(p.x, p.z, p.x + dir.x * speed * dt, p.z + dir.z * speed * dt);
+  p.x = nx;
+  p.z = nz;
+
+  // 台阶与庭院有高差，平滑过渡
+  const gy = temple.groundHeightAt(p.x, p.z);
+  p.y += (gy - p.y) * Math.min(1, dt * 12);
+
+  monk.faceTo(Math.atan2(dir.x, dir.z), dt);
+  movedThisFrame = true;
+}
+
+function doAnjali() {
+  tempPose = { pose: 'anjali', until: performance.now() + 2600 };
+  sounds.chime();
+  net?.event('anjali');
+  if (save.muted) toast('声音是关的 · 点右上「声音」开启');
+  floater(monkHead(), '合十');
+}
+
+function toggleBow(btn?: HTMLButtonElement) {
+  bowing = !bowing;
+  const b = btn ?? (actionsBar.querySelector('[data-act="bow"]') as HTMLButtonElement);
+  b?.classList.toggle('on', bowing);
+  if (bowing) sounds.chime(0.7);
+}
+
+function knock(auto = false) {
+  if (!requireSeated()) return;
+  if (!audioOn && !auto) {
+    void toggleSound();
+    return;
+  }
+  if (save.muted) {
+    toast('声音是关的 · 点右上「声音」开启');
+  }
+  sounds.woodfish(1);
+  merit++;
+  save.merit = merit;
+  meritEl.textContent = String(merit);
+  net?.event('fish');
+
+  lastKnock = performance.now();
+  malletHitAt = lastKnock;
+  handFish.visible = true;
+  if (auto) fishSession++;
+  // 敲的时候摆出"手在身前"的姿态，从背后也能看出在动
+  if (!bowing && !fishAuto) tempPose = { pose: 'bead', until: lastKnock + 1500 };
+
+  floater(monkHead().add(new THREE.Vector3(0, 0.42, 0)), '功德 +1');
+
+  if (navigator.userActivation?.isActive && 'vibrate' in navigator) {
+    navigator.vibrate?.(8);
+  }
+
+  // 一段很短的时间后把持珠/木鱼收起来
+  window.setTimeout(() => {
+    if (performance.now() - lastKnock > 3800) handFish.visible = false;
+  }, 4000);
+}
+
+/** 两拍之间的间隔，稍微抖一点，别像节拍器 */
+function nextFishInterval() {
+  return 1500 + Math.random() * 340;
+}
+
+/** 每敲一下刷新面板：涟漪重放 + 进度条从头走到下一拍 */
+function fishBeatUI(interval: number) {
+  fishIcon.classList.remove('hit');
+  void fishIcon.offsetWidth;
+  fishIcon.classList.add('hit');
+
+  fishFill.style.transition = 'none';
+  fishFill.style.transform = 'scaleX(0)';
+  void fishFill.offsetWidth;
+  fishFill.style.transition = `transform ${interval}ms linear`;
+  fishFill.style.transform = 'scaleX(1)';
+
+  fishCountEl.textContent = String(fishSession);
+}
+
+function setFishAuto(on: boolean) {
+  if (on) {
+    if (fishAuto) return;
+    if (!requireSeated()) return;
+    if (beadOpen) setBeadPanel(false);
+    if (!audioOn) void toggleSound();
+    fishAuto = true;
+    fishSession = 0;
+    fishPanel.classList.add('open');
+    actionsBar.querySelector('[data-act="woodfish"]')?.classList.add('on');
+    // 点下去先敲一记，之后按节拍自己走
+    const iv = nextFishInterval();
+    knock(true);
+    fishNext = performance.now() + iv;
+    fishBeatUI(iv);
+  } else {
+    if (!fishAuto) return;
+    fishAuto = false;
+    fishPanel.classList.remove('open');
+    actionsBar.querySelector('[data-act="woodfish"]')?.classList.remove('on');
+    fishIcon.classList.remove('hit');
+    fishFill.style.transition = 'none';
+    fishFill.style.transform = 'scaleX(0)';
+    if (fishSession > 0) toast(`连敲 ${fishSession} 下 · 功德 +${fishSession}`);
+  }
+}
+
+/** 合掌 / 礼佛 / 木鱼 / 念珠 都必须在蒲团上做 */
+function requireSeated(): boolean {
+  if (sitting) return true;
+  toast('先找个蒲团坐下，再合掌、礼佛、敲木鱼、捻念珠');
+  actionsBar.classList.remove('nudge');
+  void actionsBar.offsetWidth; // 强制重排，让抖动动画能重放
+  actionsBar.classList.add('nudge');
+  window.setTimeout(() => actionsBar.classList.remove('nudge'), 420);
+  return false;
+}
+
+function monkHead(): THREE.Vector3 {
+  return monk.root.position.clone().add(new THREE.Vector3(0, 1.15, 0));
+}
+
+function setBeadPanel(open: boolean) {
+  beadOpen = open;
+  beadPanel.classList.toggle('open', open);
+  beadsUI.setOpen(open);
+  const b = actionsBar.querySelector('[data-act="beads"]');
+  b?.classList.toggle('on', open);
+  if (open) {
+    setFishAuto(false);
+    sounds.bead(0.5);
+  } else {
+    // 收起面板就停自动，不要在看不见的时候还一直拨
+    setBeadAuto(false);
+  }
+}
+
+/** 自动捻珠：跟木鱼的自动同一套手感 */
+function setBeadAuto(on: boolean) {
+  if (on) {
+    if (beadsUI.isAuto) return;
+    if (!requireSeated()) return;
+    if (!beadOpen) setBeadPanel(true);
+    if (!audioOn) void toggleSound();
+    beadsUI.setAuto(true);
+  } else {
+    if (!beadsUI.isAuto) return;
+    beadsUI.setAuto(false);
+    const n = beadsUI.session;
+    if (n > 1) toast(`自动捻过 ${n} 颗 · 念珠 ${beadsUI.count}`);
+  }
+  beadPanel.classList.toggle('auto', beadsUI.isAuto);
+  btnBeadAuto.classList.toggle('on', beadsUI.isAuto);
+  btnBeadAuto.textContent = beadsUI.isAuto ? '停' : '自动';
+}
+
+// ————————————————————————————— 同修（联机）
+
+/** 服务器时间，没连上就用本机 */
+function serverNow(): number {
+  return net?.serverNow ?? Date.now();
+}
+
+function updateOnline(n: number) {
+  onlineEl.textContent = String(Math.max(1, n));
+}
+
+function seatIndexOf(c: Cushion | null): number {
+  return c ? temple.cushions.indexOf(c) : -1;
+}
+
+/** 这张蒲团是不是被别的同修坐着 */
+function seatTaken(c: Cushion): boolean {
+  const who = remoteSeats.get(seatIndexOf(c));
+  return !!who && who !== net?.id;
+}
+
+function addRemote(info: RemoteInfo) {
+  if (!info?.id || info.id === net?.id) return;
+  removeRemote(info.id);
+  const r = new RemotePlayer(info);
+  remotes.set(info.id, r);
+  scene.add(r.monk.root);
+  if (info.seat !== null) remoteSeats.set(info.seat, info.id);
+}
+
+function removeRemote(id: string) {
+  const r = remotes.get(id);
+  if (!r) return;
+  scene.remove(r.monk.root);
+  r.dispose();
+  remotes.delete(id);
+  for (const [seat, who] of [...remoteSeats]) if (who === id) remoteSeats.delete(seat);
+}
+
+/** 别人的木鱼 / 过珠：只在听得见的距离内出声，音量随距离衰减 */
+function playRemoteEvent(id: string, k: NetEventKind) {
+  const r = remotes.get(id);
+  if (!r) return;
+  const d = r.monk.root.position.distanceTo(monk.root.position);
+  if (d > 18) return;
+  const vol = (1 - d / 18) ** 1.5;
+  if (vol < 0.03) return;
+  if (k === 'fish') sounds.woodfish(vol);
+  else if (k === 'bead') sounds.bead(vol * 0.85);
+  else if (k === 'round') sounds.bell(196, vol);
+  else if (k === 'anjali') sounds.chime(vol * 0.85);
+  else if (k === 'incense') sounds.incense();
+}
+
+function initNet() {
+  net = new NetClient({
+    name: save.name,
+    robe: 0x6b4a35,
+    handlers: {
+      onWelcome(_id, players, seats) {
+        mySeat = null;
+        for (const key of [...remotes.keys()]) removeRemote(key);
+        remoteSeats.clear();
+        for (const [seat, who] of seats) remoteSeats.set(seat, who);
+        for (const p of players) addRemote(p);
+        updateOnline(players.length + 1);
+        if (!linkToastShown) {
+          linkToastShown = true;
+          if (players.length) toast(`法堂里已有 ${players.length} 位同修`);
+          else toast('已与山寺连线 · 可邀人同来');
+        }
+      },
+      onJoin(p) {
+        addRemote(p);
+        toast(`${p.name} 进来了`);
+      },
+      onLeave(id) {
+        removeRemote(id);
+      },
+      onSnap(_now, list) {
+        remoteSeats.clear();
+        for (const e of list) {
+          const r = remotes.get(e.id);
+          if (r) r.setTarget(e);
+          if (e.seat !== null) remoteSeats.set(e.seat, e.id);
+        }
+      },
+      onSeats(seats) {
+        remoteSeats.clear();
+        for (const [seat, who] of seats) {
+          if (who !== net?.id) remoteSeats.set(seat, who);
+        }
+      },
+      onEvent(id, k) {
+        playRemoteEvent(id, k);
+      },
+      onSeatResult(seat, ok, by) {
+        if (ok) {
+          mySeat = seat;
+          return;
+        }
+        if (seat === null) return;
+        // 服务端说这位置被人占了：站起来让他
+        mySeat = null;
+        if (sitting) {
+          toast(by ? `${by} 已经坐在这里了` : '这张蒲团有人了');
+          standUp();
+        }
+      },
+      onOnline(n) {
+        updateOnline(n);
+      },
+      onStatus(s) {
+        if (s === 'full') toast('这间法堂坐满了 · 稍后再来');
+        else if (s === 'open' && linkToastShown) toast('已重新连线');
+        else if (s === 'closed' && linkToastShown) toast('连线断了 · 正在重连…');
+      },
+    },
+  });
+  net.connect();
+}
+
+// ————————————————————————————— 姿态决定
+
+function decidePose(): Pose {
+  const now = performance.now();
+  if (tempPose && tempPose.until > now) return tempPose.pose;
+  if (tempPose && tempPose.until <= now) tempPose = null;
+
+  if (beadOpen || fishAuto) return 'bead';
+  if (bowing) return 'bow';
+  if (sitting) return 'sit';
+  if (movedThisFrame) return 'walk';
+  return 'idle';
+}
+
+// ————————————————————————————— 主循环
+
+let prevNow = performance.now();
+let dnTimer = 0;
+
+function frame(now: number) {
+  const dt = Math.min(0.05, (now - prevNow) / 1000);
+  prevNow = now;
+  const t = now / 1000;
+  movedThisFrame = false;
+
+  updateMovement(dt);
+
+  const pose = decidePose();
+  if (pose !== lastPose) {
+    monk.setPose(pose);
+    lastPose = pose;
+  }
+  monk.update(dt, t);
+
+  // 同修：本机上报名自的位姿，别人的位姿插值到目标
+  net?.report(
+    monk.root.position.x,
+    monk.root.position.z,
+    monk.root.rotation.y,
+    pose,
+    sitting ? seatIndexOf(sitting) : null,
+  );
+  for (const r of remotes.values()) r.update(dt, t, temple);
+
+  // 手持木鱼：敲击后短暂出现
+  if (handFish.visible) {
+    if (now - lastKnock > 4200) handFish.visible = false;
+    const e = Math.min(1, (now - malletHitAt) / 130);
+    handMallet.rotation.x = -0.9 * (1 - e) * (e > 0 ? 1 : 0);
+    handFish.position.y = 0.46 + Math.sin(Math.min(1, (now - malletHitAt) / 90) * Math.PI) * 0.01;
+  }
+
+  // 自动木鱼：到点就敲
+  if (fishAuto) {
+    if (!sitting) {
+      setFishAuto(false);
+    } else if (now >= fishNext) {
+      const iv = nextFishInterval();
+      knock(true);
+      fishNext = now + iv;
+      fishBeatUI(iv);
+    }
+  }
+
+  temple.update(dt, t);
+
+  // 镜头跟随
+  const focusY = sitting ? 0.72 : 1.02;
+  const want = monk.root.position.clone().add(new THREE.Vector3(0, focusY, 0));
+  controls.focus.lerp(want, Math.min(1, dt * 5.5));
+  controls.minCamY = monk.root.position.y + 0.55;
+  // 在殿内时把相机压在天花板以下，否则拉远会翻到屋顶外面去。
+  // 用插值过渡，避免跨过门槛那一刻镜头突然跳一下。
+  const p = monk.root.position;
+  const insideHall = p.z < 10.6 && Math.abs(p.x) < HALL_HALF_W;
+  const camYTarget = insideHall ? temple.ceilY - 0.45 : CAMY_FREE;
+  if (camYLimit === null) camYLimit = camYTarget;
+  camYLimit += (camYTarget - camYLimit) * Math.min(1, dt * 9);
+  controls.maxCamY = camYLimit;
+  controls.update(dt);
+
+  renderer.render(scene, camera);
+
+  if (now - dnTimer > 30_000) {
+    dnTimer = now;
+    updateDayNight();
+    store.persist(save);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+function updateMovement(dt: number) {
+  const kb = controls.readKeyboard();
+  const stickV = controls.walk;
+  let ix = 0;
+  let iz = 0;
+
+  if (stickV.lengthSq() > 0.02) {
+    ix = stickV.x;
+    iz = stickV.y;
+  } else if (kb.lengthSq() > 0.2) {
+    ix = kb.x;
+    iz = kb.y;
+  }
+
+  const wantsMove = Math.abs(ix) > 0.02 || Math.abs(iz) > 0.02;
+  // 坐着时一动摇杆/方向键就起身，省得还要先点地面
+  if (sitting) {
+    if (!wantsMove) return;
+    standUp();
+  }
+
+  if (Math.abs(ix) > 0.02 || Math.abs(iz) > 0.02) {
+    moveTarget = null;
+    pendingSeat = null;
+    pendingIncense = false;
+
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    fwd.normalize();
+    const right = new THREE.Vector3().crossVectors(fwd, UP).normalize();
+
+    const move = new THREE.Vector3()
+      .addScaledVector(right, ix)
+      .addScaledVector(fwd, -iz);
+    if (move.lengthSq() > 0.0001) {
+      move.normalize();
+      stepTo(move, dt, 2.4 + Math.min(1.4, Math.hypot(ix, iz) * 1.4));
+    }
+    return;
+  }
+
+  if (moveTarget) {
+    const to = moveTarget.clone().sub(monk.root.position);
+    to.y = 0;
+    const d = to.length();
+    if (d < 0.16) {
+      moveTarget = null;
+      arrive();
+    } else {
+      to.normalize();
+      // 靠近目标时减速，避免"撞上去"
+      stepTo(to, dt, d < 0.8 ? 1.3 : 2.7);
+    }
+  }
+}
+
+// ————————————————————————————— 尺寸
+
+function onResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  controls.resize(w, h);
+}
+
+// ————————————————————————————— 调试钩子（本地重建版方便排查，正式版删掉）
+;(window as any).__ss = () => ({
+  pos: monk.root.position.toArray().map((v) => +v.toFixed(2)),
+  rotY: +monk.root.rotation.y.toFixed(3),
+  pose: monk.currentPose,
+  sitting: !!sitting,
+  moveTarget: moveTarget ? moveTarget.toArray().map((v) => +v.toFixed(2)) : null,
+  camAz: +controls.camera.position.toArray()[0].toFixed(2),
+});
+
+// 调试：木鱼状态
+;(window as any).__fish = () => ({ auto: fishAuto, session: fishSession, next: Math.round(fishNext) });
+
+// 调试：联机状态
+;(window as any).__net = () => ({
+  ...(net?.debug() ?? { connected: false }),
+  remotes: remotes.size,
+  remoteNames: [...remotes.values()].map((r) => r.name),
+  remoteSeats: [...remoteSeats.entries()],
+  mySeat,
+});
+
+// 调试：念珠状态
+;(window as any).__beads = () => ({
+  auto: beadsUI.isAuto,
+  session: beadsUI.session,
+  total: beadsUI.count,
+});
+
+// 调试：相机参数
+;(window as any).__cam = () => controls.debug();
+
+// 调试：强制昼夜 / 瞬移，仅用于自动化测试
+;(window as any).__night = (v: boolean) => temple.setNight(v);
+;(window as any).__tp = (x: number, z: number) => {
+  const y = temple.groundHeightAt(x, z);
+  monk.root.position.set(x, y, z);
+  controls.focus.set(x, y + 1.02, z);
+  return [x, y, z];
+};
+
+// 调试：把坐垫投影到屏幕坐标，方便自动化测试点中
+;(window as any).__cs = () =>
+  temple.cushions.map((c) => {
+    const v = c.seat.clone().project(camera);
+    return [
+      Math.round((v.x * 0.5 + 0.5) * window.innerWidth),
+      Math.round((-v.y * 0.5 + 0.5) * window.innerHeight),
+    ];
+  });
+
+// 调试：量三档总线当前电平（dBFS），用来校平衡
+;(window as any).__audio = async (ms = 1500) => {
+  const ctx = host.ctx;
+  const buses = { amb: host.ambBus, chant: host.chantBus, sfx: host.sfxBus };
+  const taps = (Object.keys(buses) as Array<keyof typeof buses>).map((n) => {
+    const a = ctx.createAnalyser();
+    a.fftSize = 2048;
+    buses[n].connect(a);
+    return { n, a, buf: new Float32Array(a.fftSize), peak: 0, sum: 0, k: 0 };
+  });
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    await new Promise((r) => setTimeout(r, 60));
+    for (const t of taps) {
+      t.a.getFloatTimeDomainData(t.buf);
+      let s = 0;
+      for (let i = 0; i < t.buf.length; i++) s += t.buf[i] * t.buf[i];
+      const rms = Math.sqrt(s / t.buf.length);
+      if (rms > t.peak) t.peak = rms;
+      t.sum += rms;
+      t.k++;
+    }
+  }
+  const db = (v: number) => (v > 0 ? +(20 * Math.log10(v)).toFixed(1) : -99);
+  const out: Record<string, unknown> = { state: ctx.state, vols: { ...save.vol }, muted: save.muted };
+  for (const t of taps) {
+    out[t.n] = { peakDb: db(t.peak), avgDb: db(t.sum / Math.max(1, t.k)) };
+    buses[t.n].disconnect(t.a);
+  }
+  return out;
+};
+
+// ————————————————————————————— go
+
+void boot();

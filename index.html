@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#080c12" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f16'/%3E%3Cpath d='M6 22 L16 9 L26 22 Z' fill='%23c8a86b'/%3E%3C/svg%3E"
+    />
+    <title>山寺 · 静静坐一会儿</title>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <!-- 载入 -->
+    <div id="loading" class="overlay show">
+      <div class="loading-inner">
+        <p class="eyebrow">SANSA · 本地重建</p>
+        <h1>山寺</h1>
+        <p class="lede">留一点安静的时间。</p>
+        <div class="bar"><i id="load-bar"></i></div>
+        <p class="tiny" id="load-tip">正在开门…</p>
+      </div>
+    </div>
+
+    <!-- 首屏 -->
+    <div id="welcome" class="overlay">
+      <div class="welcome-inner">
+        <p class="eyebrow">静静坐一会儿</p>
+        <h1>山寺</h1>
+        <p class="lede">
+          在庭院漫步，坐上坐垫礼佛、转念珠，<br />或只是听一会儿山风。
+        </p>
+        <button id="btn-start" class="primary" type="button">开 门</button>
+        <div id="name-row">
+          <label for="name-input">称呼</label>
+          <input id="name-input" maxlength="12" placeholder="留空则称“无名”" autocomplete="off" />
+          <button id="btn-dice" class="dice" type="button" title="换一个名号" aria-label="换一个名号">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+              <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="4.6" fill="none"
+                stroke="currentColor" stroke-width="1.4" />
+              <circle cx="8.7" cy="8.7" r="1.45" fill="currentColor" />
+              <circle cx="15.3" cy="8.7" r="1.45" fill="currentColor" />
+              <circle cx="12" cy="12" r="1.45" fill="currentColor" />
+              <circle cx="8.7" cy="15.3" r="1.45" fill="currentColor" />
+              <circle cx="15.3" cy="15.3" r="1.45" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+        <p class="tiny">无需注册 · 没有聊天 · 没有排行榜</p>
+      </div>
+    </div>
+
+    <!-- 顶部 -->
+    <header id="topbar">
+      <div class="who">
+        <span id="hall-name">法堂</span>
+        <small id="daynight">夜</small>
+      </div>
+      <div class="top-actions">
+        <button id="btn-service" class="pill" type="button">上香</button>
+        <button id="btn-sound" class="pill" type="button">声音</button>
+        <button id="btn-settings" class="pill icon" type="button" aria-label="设置">⋯</button>
+      </div>
+    </header>
+
+    <!-- 左下：提示与累计 -->
+    <div id="meter">
+      <span>木鱼 <b id="merit">0</b></span>
+      <span>念珠 <b id="beads-count">0</b></span>
+      <span id="online-wrap">同修 <b id="online">1</b></span>
+    </div>
+
+    <!-- 摇杆 -->
+    <div id="stick">
+      <div class="stick-base"><div class="stick-knob"></div></div>
+    </div>
+
+    <!-- 底部四键 -->
+    <nav id="actions">
+      <button data-act="anjali" type="button"><i>合</i><span>合掌</span></button>
+      <button data-act="bow" type="button"><i>礼</i><span>礼佛</span></button>
+      <button data-act="woodfish" type="button"><i>木</i><span>木鱼</span></button>
+      <button data-act="beads" type="button"><i>珠</i><span>念珠</span></button>
+    </nav>
+
+    <!-- 念珠面板 -->
+    <section id="bead-panel">
+      <div class="bead-head">
+        <span id="bead-round">第 1 圈</span>
+        <b id="bead-num">0</b>
+        <span class="bead-total">/108</span>
+        <span id="bead-led"></span>
+        <button id="bead-auto" type="button">自动</button>
+        <button id="bead-close" type="button" aria-label="收起">收起</button>
+      </div>
+      <canvas id="bead-canvas"></canvas>
+      <p class="bead-hint">顺着珠串拖动 · 滚轮 · 空格 / E · 也可自动捻珠</p>
+    </section>
+
+    <!-- 木鱼面板：自动敲击 -->
+    <section id="fish-panel">
+      <div class="fish-row">
+        <div class="fish-icon">
+          <span class="fish-ripple"></span>
+          <span class="fish-mark">木</span>
+        </div>
+        <div class="fish-info">
+          <div class="fish-title">
+            <span class="fish-led"></span>
+            <span>木鱼 · 自动</span>
+            <b id="fish-count">0</b><em>次</em>
+          </div>
+          <div class="fish-bar"><i id="fish-fill"></i></div>
+        </div>
+        <button id="fish-close" type="button">停</button>
+      </div>
+    </section>
+
+    <!-- 声音 / 设置 -->
+    <section id="settings">
+      <h3>声音</h3>
+      <label>环境音 <input id="vol-amb" type="range" min="0" max="100" value="32" /></label>
+      <label>诵经 <input id="vol-chant" type="range" min="0" max="100" value="62" /></label>
+      <label>交互音效 <input id="vol-sfx" type="range" min="0" max="100" value="70" /></label>
+      <div class="hint-row">首次进入默认静音，之后会记住你的偏好。</div>
+      <h3>其他</h3>
+      <button id="btn-reset" class="ghost" type="button">清空累计数</button>
+      <div class="hint-row" id="storage-note"></div>
+      <button id="btn-settings-close" class="primary small" type="button">好</button>
+    </section>
+
+    <!-- 飘字层 -->
+    <div id="floaters"></div>
+
+    <p id="toast"></p>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

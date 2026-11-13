@@ -1,0 +1,24 @@
+{
+  "name": "shanshi",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "山寺 · 静静坐一会儿（本地重建版）",
+  "scripts": {
+    "dev": "vite --host",
+    "server": "node server/index.mjs",
+    "start": "npm run build && node server/index.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "three": "^0.187.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

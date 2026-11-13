@@ -1,0 +1,19 @@
+# 山寺 · Caddy 反向代理模板
+#
+# 把 shansi.example.com 换成你的域名，然后：
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Caddy 会自动申请 HTTPS，并自动把 WebSocket 的 Upgrade 头传下去，
+# 前端不需要改任何代码（client.ts 用 location.host 拼 ws 地址，会自己变成 wss://）。
+
+shansi.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787
+}
+
+# 只想先用 IP 试玩、暂时不配域名时，把上面整段换成：
+#
+# :80 {
+# 	reverse_proxy 127.0.0.1:8787
+# }

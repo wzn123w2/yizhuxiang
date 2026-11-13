@@ -1,0 +1,40 @@
+# 山寺 · systemd 服务模板
+#
+#   sudo cp deploy/shanshi.service /etc/systemd/system/shanshi.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now shanshi
+#   systemctl status shanshi -l
+#   journalctl -u shanshi -f          # 看连接日志
+#
+# 部署路径、用户、node 路径按服务器实际情况改（用 `command -v node` 查路径；
+# 如果 node 是 nvm 装的，一般不用 systemd 跑，改用 pm2 更方便）。
+
+[Unit]
+Description=ShanSi (山寺 · 静静坐一会儿)
+Documentation=https://example.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/shanshi
+Environment=NODE_ENV=production
+Environment=PORT=8787
+Environment=MAX_PLAYERS=12
+ExecStart=/usr/bin/node server/index.mjs
+Restart=always
+RestartSec=2
+User=www-data
+Group=www-data
+StandardOutput=journal
+StandardError=journal
+
+# 加固：进程只写自己的目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/shanshi
+
+[Install]
+WantedBy=multi-user.target
