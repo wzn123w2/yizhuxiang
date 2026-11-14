@@ -740,9 +740,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   const altarZ = -8.1;
   const steps: Array<[number, number, number]> = [
-    [9.4, 0.34, 4.2],
-    [8.0, 0.32, 3.4],
-    [6.6, 0.32, 2.8],
+    [16.0, 0.34, 4.4],
+    [14.8, 0.32, 3.9],
+    [14.0, 0.32, 3.4],
   ];
   let ay = 0;
   steps.forEach(([w, h, d], i) => {
@@ -760,98 +760,134 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   });
   const altarTop = ay + 0.1;
 
-  const lotus = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.35, 0.42, 24), matBronzeLit);
-  lotus.position.set(0, altarTop + 0.21, altarZ);
-  lotus.castShadow = true;
-  group.add(lotus);
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), matBronzeLit);
-    petal.scale.set(1, 0.42, 1.5);
-    petal.position.set(Math.cos(a) * 2.0, altarTop + 0.34, altarZ + Math.sin(a) * 2.0);
-    petal.rotation.y = -a;
-    group.add(petal);
-  }
-
   const bronzeDark = new THREE.MeshStandardMaterial({
     color: 0x6b5942,
     roughness: 0.52,
     metalness: 0.62,
   });
 
-  const legs = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), bronzeDark);
-  legs.scale.set(1.92, 0.62, 1.35);
-  legs.position.set(0, altarTop + 0.62, altarZ);
-  legs.castShadow = true;
-  group.add(legs);
+  /** 火焰光背的材质：昼夜切换时和头光一起调透明度 */
+  const mandorlaMats: THREE.MeshBasicMaterial[] = [];
 
-  const skirt = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.72, 0.42, 26), bronzeDark);
-  skirt.position.set(0, altarTop + 0.9, altarZ);
-  skirt.castShadow = true;
-  group.add(skirt);
+  /**
+   * 一尊坐佛：莲座 + 结跏趺坐 + 禅定印 + 火焰光背。
+   *
+   * 本地坐标以莲座底面为原点，所以只要给一个 scale 就能配出
+   * 「中间主尊 + 两侧略小的三世佛」。
+   */
+  function makeBuddha(px: number, s: number, big: boolean) {
+    const g = new THREE.Group();
+    g.position.set(px, altarTop, altarZ);
+    g.scale.setScalar(s);
 
-  const torsoProfile: THREE.Vector2[] = [
-    new THREE.Vector2(1.16, 0),
-    new THREE.Vector2(1.1, 0.25),
-    new THREE.Vector2(0.96, 0.55),
-    new THREE.Vector2(0.82, 0.85),
-    new THREE.Vector2(0.76, 1.12),
-    new THREE.Vector2(0.78, 1.35),
-    new THREE.Vector2(0.7, 1.5),
-  ];
-  const body = new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 26), bronzeDark);
-  body.position.set(0, altarTop + 1.0, altarZ);
-  body.castShadow = true;
-  group.add(body);
+    const at = (m: THREE.Mesh, y = 0, z = 0) => {
+      m.position.set(0, y, z);
+      m.castShadow = true;
+      g.add(m);
+      return m;
+    };
 
-  const shoulders = new THREE.Mesh(new THREE.SphereGeometry(0.82, 20, 14), bronzeDark);
-  shoulders.scale.set(1.5, 0.5, 0.86);
-  shoulders.position.set(0, altarTop + 2.38, altarZ);
-  shoulders.castShadow = true;
-  group.add(shoulders);
+    // 莲座
+    at(new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.35, 0.42, 24), matBronzeLit), 0.21);
+    const petals = big ? 16 : 12;
+    for (let i = 0; i < petals; i++) {
+      const a = (i / petals) * Math.PI * 2;
+      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), matBronzeLit);
+      petal.scale.set(1, 0.42, 1.5);
+      petal.position.set(Math.cos(a) * 2.0, 0.34, Math.sin(a) * 2.0);
+      petal.rotation.y = -a;
+      g.add(petal);
+    }
 
-  for (const sx of [-1, 1]) {
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.23, 1.0, 4, 10), bronzeDark);
-    arm.position.set(sx * 1.0, altarTop + 1.72, altarZ + 0.08);
-    arm.rotation.z = sx * 0.1;
-    arm.rotation.x = 0.16;
-    arm.castShadow = true;
-    group.add(arm);
+    // 结跏趺坐的下半身
+    const legs = at(new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), bronzeDark), 0.62);
+    legs.scale.set(1.92, 0.62, 1.35);
 
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 10), bronzeDark);
-    hand.scale.set(1.35, 0.6, 1);
-    hand.position.set(sx * 0.42, altarTop + 0.98, altarZ + 0.66);
-    hand.castShadow = true;
-    group.add(hand);
+    at(new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.72, 0.42, 26), bronzeDark), 0.9);
+
+    // 躯干
+    const torsoProfile: THREE.Vector2[] = [
+      new THREE.Vector2(1.16, 0),
+      new THREE.Vector2(1.1, 0.25),
+      new THREE.Vector2(0.96, 0.55),
+      new THREE.Vector2(0.82, 0.85),
+      new THREE.Vector2(0.76, 1.12),
+      new THREE.Vector2(0.78, 1.35),
+      new THREE.Vector2(0.7, 1.5),
+    ];
+    at(new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 26), bronzeDark), 1.0);
+
+    const shoulders = at(new THREE.Mesh(new THREE.SphereGeometry(0.82, 20, 14), bronzeDark), 2.38);
+    shoulders.scale.set(1.5, 0.5, 0.86);
+
+    // 双臂 + 禅定印（双手叠放腹前）
+    for (const sx of [-1, 1]) {
+      const arm = at(new THREE.Mesh(new THREE.CapsuleGeometry(0.23, 1.0, 4, 10), bronzeDark), 1.72, 0.08);
+      arm.position.x = sx * 1.0;
+      arm.rotation.z = sx * 0.1;
+      arm.rotation.x = 0.16;
+
+      const hand = at(new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 10), bronzeDark), 0.98, 0.66);
+      hand.position.x = sx * 0.42;
+      hand.scale.set(1.35, 0.6, 1);
+    }
+
+    const drape = at(new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.26, 10, 24, Math.PI), bronzeDark), 0.96, 0.3);
+    drape.rotation.set(-Math.PI / 2, 0, 0);
+
+    at(new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.26, 14), bronzeDark), 2.6);
+
+    const head = at(new THREE.Mesh(new THREE.SphereGeometry(0.4, 22, 18), bronzeDark), 3.0);
+    head.scale.set(0.92, 1.06, 0.94);
+
+    const ushnisha = at(new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), bronzeDark), 3.38);
+    ushnisha.scale.set(1, 0.85, 1);
+
+    for (const sx of [-1, 1]) {
+      const ear = at(new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), bronzeDark), 2.98);
+      ear.position.x = sx * 0.38;
+      ear.scale.set(0.55, 1.5, 0.7);
+    }
+
+    // 火焰光背：一片尖顶叶形，两层叠加出焰心
+    const flame = new THREE.Shape();
+    flame.moveTo(0, 0.1);
+    flame.bezierCurveTo(1.8, 0.85, 1.9, 3.2, 0.64, 4.4);
+    flame.quadraticCurveTo(0.24, 5.05, 0, 5.75);
+    flame.quadraticCurveTo(-0.24, 5.05, -0.64, 4.4);
+    flame.bezierCurveTo(-1.9, 3.2, -1.8, 0.85, 0, 0.1);
+
+    for (const [k, op] of [
+      [1, 0.15],
+      [0.74, 0.13],
+    ] as Array<[number, number]>) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffc172,
+        transparent: true,
+        opacity: op,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      mat.userData.base = op;
+      mandorlaMats.push(mat);
+
+      const geo = new THREE.ShapeGeometry(flame, 20);
+      geo.scale(k, k, 1);
+      const layer = new THREE.Mesh(geo, mat);
+      // 缩小的一层要抬回去，保持同心
+      layer.position.set(0, 0.05 + (1 - k) * 2.9, -1.15);
+      g.add(layer);
+    }
+
+    group.add(g);
+    return g;
   }
 
-  const drape = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.26, 10, 24, Math.PI), bronzeDark);
-  drape.rotation.set(-Math.PI / 2, 0, 0);
-  drape.position.set(0, altarTop + 0.96, altarZ + 0.3);
-  drape.castShadow = true;
-  group.add(drape);
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.26, 14), bronzeDark);
-  neck.position.set(0, altarTop + 2.6, altarZ);
-  group.add(neck);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 22, 18), bronzeDark);
-  head.scale.set(0.92, 1.06, 0.94);
-  head.position.set(0, altarTop + 3.0, altarZ);
-  head.castShadow = true;
-  group.add(head);
-
-  const ushnisha = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), bronzeDark);
-  ushnisha.scale.set(1, 0.85, 1);
-  ushnisha.position.set(0, altarTop + 3.38, altarZ);
-  group.add(ushnisha);
-
-  for (const sx of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), bronzeDark);
-    ear.scale.set(0.55, 1.5, 0.7);
-    ear.position.set(sx * 0.38, altarTop + 2.98, altarZ);
-    group.add(ear);
-  }
+  // 三世佛：中间释迦牟尼，两侧略小（药师 / 阿弥陀）
+  makeBuddha(0, 1, true);
+  makeBuddha(-5.1, 0.7, false);
+  makeBuddha(5.1, 0.7, false);
 
   const haloMat = new THREE.MeshBasicMaterial({
     color: 0xffcf8a,
@@ -887,7 +923,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const lanterns: THREE.PointLight[] = [];
   for (const sx of [-1, 1]) {
     const lg = new THREE.Group();
-    lg.position.set(sx * 4.6, CEIL - 0.7, altarZ + 1.4);
+    lg.position.set(sx * 6.6, CEIL - 0.7, altarZ + 2.0);
 
     const rope = new THREE.Mesh(
       new THREE.CylinderGeometry(0.012, 0.012, 1.5, 5),
@@ -1009,8 +1045,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   candleStand(-8.3, 0.6, 2.5, true);
   candleStand(8.3, 0.6, 2.5, true);
   // 佛前两支烛（只有火苗，不加真实光源，省着色器开销）
-  candleStand(-3.9, -5.4, 1.6, false);
-  candleStand(3.9, -5.4, 1.6, false);
+  candleStand(-7.0, -5.2, 1.6, false);
+  candleStand(7.0, -5.2, 1.6, false);
   // 门口两支：同样只给火苗，让前景不至于一片黑
   candleStand(-7.6, 7.4, 1.7, false);
   candleStand(7.6, 7.4, 1.7, false);
@@ -1763,6 +1799,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
     const haloK = DAY.halo + (NIGHT.halo - DAY.halo) * n;
     haloMat.opacity = 0.4 * haloK;
+    for (const m of mandorlaMats) {
+      m.opacity = ((m.userData.base as number) ?? 0.14) * haloK;
+    }
     (haloGlow.material as THREE.SpriteMaterial).opacity = 0.42 * haloK;
     backGlow.intensity = 14 + 16 * n;
 
