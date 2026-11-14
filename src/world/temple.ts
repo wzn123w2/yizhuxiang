@@ -711,6 +711,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // ————————————— 柱子
 
+  // 只留两侧的两排檐柱（x = ±9.5）。
+  // 原来还有一对 [-4.2, -8] / [4.2, -8] 的内柱，正好立在佛坛前沿、
+  // 夹在中间主尊与两侧侧尊之间，从殿内正面看会直接切在佛像上，故去掉。
   const pillarPositions: Array<[number, number]> = [
     [-9.5, -8],
     [9.5, -8],
@@ -718,8 +721,6 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     [9.5, -1],
     [-9.5, 5.5],
     [9.5, 5.5],
-    [-4.2, -8],
-    [4.2, -8],
   ];
   for (const [x, z] of pillarPositions) {
     const col = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.37, CEIL, 14), matVermilion);
