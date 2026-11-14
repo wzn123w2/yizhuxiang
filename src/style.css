@@ -2,6 +2,12 @@
   --gold: #c8a86b;
   --gold-bright: #e8c48a;
   --paper: #ece8d6;
+  /* 底部界面共用的尺子：摇杆尺寸/落点、底部面板的抬升高度都从这里取，
+     改一处就够，不会出现“摇杆改了面板没跟上”的错位。 */
+  --stick-h: 132px;
+  --stick-bottom: 92px;
+  /* 摇杆上方留一点缝，底部面板就停在这条线上 */
+  --stick-clear: calc(var(--stick-bottom) + var(--stick-h) + 14px);
   --serif: ui-serif, "Songti SC", "STSong", "SimSun", serif;
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", system-ui, sans-serif;
@@ -324,9 +330,9 @@ h1 {
   display: none;
   position: fixed;
   left: 20px;
-  bottom: calc(92px + env(safe-area-inset-bottom));
-  width: 132px;
-  height: 132px;
+  bottom: calc(var(--stick-bottom) + env(safe-area-inset-bottom));
+  width: var(--stick-h);
+  height: var(--stick-h);
   z-index: 27;
   touch-action: none;
   opacity: 0;
@@ -716,10 +722,12 @@ h1 {
 }
 
 @media (pointer: coarse) and (min-width: 780px) {
+  :root {
+    --stick-h: 148px;
+  }
+
   #stick {
     left: 34px;
-    width: 148px;
-    height: 148px;
   }
 }
 
@@ -870,4 +878,17 @@ h1 {
 
 #fish-close:active {
   transform: scale(0.95);
+}
+
+/* ============ 触摸竖屏：底部面板让开摇杆 ============ */
+
+/* 摇杆常驻左下角，而念珠/木鱼面板是居中的宽条，窄屏上两者必然叠在一起
+   （摇杆会压住面板左边的珠串和「自动/收起」键）。把面板整体抬到摇杆上方，
+   各占各的位置。横屏宽度够（面板最宽 460px），本来就不重叠，保持原位。
+   ★ 这段必须放在 #bead-panel / #fish-panel 的 base 规则之后，否则会被后者覆盖。 */
+@media (pointer: coarse) and (orientation: portrait) and (max-width: 900px) {
+  #bead-panel,
+  #fish-panel {
+    bottom: min(calc(var(--stick-clear) + env(safe-area-inset-bottom)), 45vh);
+  }
 }
