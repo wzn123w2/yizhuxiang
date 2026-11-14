@@ -7,6 +7,10 @@ import {
   smokeTexture,
   grassTexture,
   pathTexture,
+  glazedRoofTexture,
+  caihuaTexture,
+  plaqueTexture,
+  latticeDoorTexture,
 } from './textures';
 
 export interface Cushion {
@@ -76,6 +80,75 @@ const WALL_X = 18;
 const BURNER_X = -6.5;
 const BURNER_Z = 0.9;
 
+/** 屋顶贴图的 UV 密度：3.3m 一个循环，一个循环里 10 垄瓦 → 一垄 0.33m */
+const ROOF_UV = 0.3;
+
+/**
+ * 起脊屋顶：外圈矩形 → 内圈矩形（或退化成一条脊线）之间放样。
+ *
+ * 剖面用 t^1.5：靠檐一段平缓、近脊一段陡 —— 中式“反宇”的大致走势，
+ * 比两块平板拼出来的屋顶好看很多，而面数只有 4 侧面 × 6 段 ≈ 48 个三角面。
+ *
+ * @param ow/od 檐口半宽/半深（外圈）
+ * @param iw/id 内圈半宽/半深；id=0 就是一条正脊（庑殿/歇山的脊）
+ * @param y0/y1 檐口高度 / 脊顶高度
+ */
+function hipRoof(
+  ow: number,
+  od: number,
+  iw: number,
+  id: number,
+  y0: number,
+  y1: number,
+  mat: THREE.Material,
+  segs = 6,
+): THREE.Mesh {
+  const ring = (t: number) => {
+    const w = ow + (iw - ow) * t;
+    const d = od + (id - od) * t;
+    const y = y0 + (y1 - y0) * Math.pow(t, 1.5);
+    return [
+      [-w, y, d],
+      [w, y, d],
+      [w, y, -d],
+      [-w, y, -d],
+    ] as Array<[number, number, number]>;
+  };
+
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+
+  const rings = Array.from({ length: segs + 1 }, (_, s) => ring(s / segs));
+
+  for (const r of rings) {
+    for (const [x, y, z] of r) {
+      pos.push(x, y, z);
+      // 平面投射：瓦垄沿着坡面一致，不会在四个面上各转一个角度
+      uv.push(x * ROOF_UV, z * ROOF_UV);
+    }
+  }
+
+  const V = (s: number, k: number) => s * 4 + (k % 4);
+  for (let s = 0; s < segs; s++) {
+    for (let k = 0; k < 4; k++) {
+      const a = V(s, k);
+      const b = V(s, k + 1);
+      const c = V(s + 1, k + 1);
+      const d = V(s + 1, k);
+      idx.push(a, b, c, a, c, d);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+
+  return new THREE.Mesh(g, mat);
+}
+
 export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Temple {
   const group = new THREE.Group();
   scene.add(group);
@@ -87,6 +160,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const smokeTex = smokeTexture();
   const grassTex = grassTexture();
   const pathTex = pathTexture();
+  const roofTex = glazedRoofTexture();
+  const caihuaTex = caihuaTexture();
+  const plaqueTex = plaqueTexture('大雄寶殿');
+  const latticeTex = latticeDoorTexture();
 
   // ————————————— 材质
 
@@ -150,6 +227,65 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     metalness: 0.15,
   });
 
+  // ——— 参考图（江南大雄宝殿）的配色：琉璃瓦、朱红柱、土黄墙、蓝绿彩画 ———
+
+  /** 琉璃筒瓦：暗猪肝色，双面（檐下抬头能看到瓦背，省得穿帮） */
+  const matGlazed = new THREE.MeshStandardMaterial({
+    map: roofTex,
+    color: 0x9c8b85,
+    roughness: 0.58,
+    metalness: 0.26,
+    side: THREE.DoubleSide,
+  });
+  /** 正脊 / 垂脊：绿琉璃 */
+  const matRidge = new THREE.MeshStandardMaterial({
+    color: 0x2c6047,
+    roughness: 0.42,
+    metalness: 0.38,
+  });
+  /** 土黄墙（外立面、院墙） */
+  const matWallOuter = new THREE.MeshStandardMaterial({
+    map: wallTex,
+    color: 0xe4c07c,
+    roughness: 0.94,
+    metalness: 0.02,
+  });
+  /** 红墙裙：墙脚那一圈赭红 */
+  const matWallBase = new THREE.MeshStandardMaterial({
+    color: 0x7d2f27,
+    roughness: 0.86,
+  });
+  /** 朱红柱 */
+  const matVermilion = new THREE.MeshStandardMaterial({
+    map: woodTex,
+    color: 0xbb4534,
+    roughness: 0.56,
+    metalness: 0.05,
+  });
+  /** 彩画额枋（贴图在每根枋上按长度单独 repeat） */
+  const caihuaMat = (len: number) => {
+    const t = caihuaTex.clone();
+    t.needsUpdate = true;
+    t.repeat.set(Math.max(1, len / 2.4), 1);
+    return new THREE.MeshStandardMaterial({
+      map: t,
+      roughness: 0.78,
+      metalness: 0.08,
+    });
+  };
+  /** 白石栏杆 / 踏跺 */
+  const matStoneLight = new THREE.MeshStandardMaterial({
+    color: 0xc9ced3,
+    roughness: 0.86,
+    metalness: 0.02,
+  });
+  /** 斗拱的金边 */
+  const matGold = new THREE.MeshStandardMaterial({
+    color: 0xc9a24a,
+    roughness: 0.35,
+    metalness: 0.6,
+  });
+
   const obstacles: Obstacle[] = [];
   const occluders: THREE.Object3D[] = [];
   const waterMeshes: THREE.MeshStandardMaterial[] = [];
@@ -167,7 +303,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   const plinth = new THREE.Mesh(
     new THREE.BoxGeometry(HALL_HW * 2 + 3, 0.7, STEP_Z0 + HALL_HD),
-    matStoneSolid,
+    new THREE.MeshStandardMaterial({ color: 0xa4aab1, roughness: 0.92, metalness: 0.02 }),
   );
   plinth.position.set(0, -0.42, hallFloor.position.z);
   plinth.receiveShadow = true;
@@ -180,7 +316,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const matStepTop = new THREE.MeshStandardMaterial({
     map: stepTopTex,
     roughness: 0.9,
-    color: 0x9aa6b3,
+    color: 0xc3c8cc,
   });
   const stepMats = [
     matStoneSolid,
@@ -239,42 +375,142 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // ————————————— 墙与屋顶
 
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2, 8, 0.7), matWall);
-  backWall.position.set(0, 4, -HALL_HD);
+  // —— 墙 ——
+  // 墙高从 8 降到 7.2：下檐屋面在墙线处只有 7.38，再高就会从瓦顶穿出去
+  const WALL_H = 7.2;
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2, WALL_H, 0.7), matWall);
+  backWall.position.set(0, WALL_H / 2, -HALL_HD);
   backWall.receiveShadow = true;
   group.add(backWall);
   occluders.push(backWall);
 
   for (const sx of [-1, 1]) {
-    const side = new THREE.Mesh(new THREE.BoxGeometry(0.7, 8, HALL_HD * 2), matWall);
-    side.position.set(sx * HALL_HW, 4, 0);
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.7, WALL_H, HALL_HD * 2), matWall);
+    side.position.set(sx * HALL_HW, WALL_H / 2, 0);
     side.receiveShadow = true;
     group.add(side);
     occluders.push(side);
   }
 
-  // 屋顶（两坡）
-  const roofDepth = HALL_HD + 2.4;
-  for (const dir of [-1, 1]) {
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2 + 4, 0.36, roofDepth), matTile);
-    slab.position.set(0, 7.55, dir * roofDepth * 0.48);
-    slab.rotation.x = dir * 0.19;
-    slab.castShadow = true;
-    slab.receiveShadow = true;
-    group.add(slab);
-    occluders.push(slab);
+  // 殿身外皮：殿内保留青灰（不抢佛像），从外面看是土黄墙 + 红墙裙
+  for (const sx of [-1, 1]) {
+    const clad = new THREE.Mesh(new THREE.BoxGeometry(0.12, WALL_H, HALL_HD * 2), matWallOuter);
+    clad.position.set(sx * (HALL_HW + 0.41), WALL_H / 2, 0);
+    clad.receiveShadow = true;
+    group.add(clad);
+
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.6, HALL_HD * 2), matWallBase);
+    skirt.position.set(sx * (HALL_HW + 0.43), 0.8, 0);
+    skirt.receiveShadow = true;
+    group.add(skirt);
   }
-  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2 + 4.6, 0.34, 0.5), matTile);
-  ridgeBeam.position.set(0, 8.72, 0);
+  {
+    const clad = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2 + 0.3, WALL_H, 0.12), matWallOuter);
+    clad.position.set(0, WALL_H / 2, -(HALL_HD + 0.41));
+    clad.receiveShadow = true;
+    group.add(clad);
+
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2 + 0.3, 1.6, 0.18), matWallBase);
+    skirt.position.set(0, 0.8, -(HALL_HD + 0.43));
+    group.add(skirt);
+  }
+
+  // ————————————— 屋顶：重檐（参考图的双层屋檐 + 暗色琉璃瓦）
+
+  /** 下檐檐口高度 */
+  const EAVE_Y = 7.0;
+
+  // 下檐（腰檐）：挑出 2.4m，坡度约 27°，比第一版陡，免得看上去像一块平板
+  const roofLower = hipRoof(14.4, 12.6, 9.6, 7.4, EAVE_Y, 9.35, matGlazed);
+  roofLower.castShadow = true;
+  roofLower.receiveShadow = true;
+  group.add(roofLower);
+  occluders.push(roofLower);
+
+  // 两层屋檐之间被遮住的墙，兼作“防穿帮”的封口
+  const clerestory = hipRoof(10.4, 8.3, 0.12, 0.12, 9.2, 9.8, matWallOuter, 3);
+  group.add(clerestory);
+
+  // 上檐：收进去、抬得更高，整座殿才有“重檐”的高度感
+  const roofUpper = hipRoof(12.0, 10.0, 5.7, 0, 9.95, 13.0, matGlazed);
+  roofUpper.castShadow = true;
+  roofUpper.receiveShadow = true;
+  group.add(roofUpper);
+  occluders.push(roofUpper);
+
+  // 上檐下的第二道彩画带：参考图两层屋檐下都有蓝绿彩绘 + 斗拱
+  for (const [len, x, z, rotY] of [
+    [22.8, 0, 9.2, 0],
+    [22.8, 0, -9.2, 0],
+    [17.2, 11.2, 0, Math.PI / 2],
+    [17.2, -11.2, 0, Math.PI / 2],
+  ] as Array<[number, number, number, number]>) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(len, 0.58, 0.26), caihuaMat(len));
+    band.position.set(x, 9.62, z);
+    band.rotation.y = rotY;
+    group.add(band);
+  }
+
+  // 正脊：绿琉璃，两端各一个上翘的鸱吻
+  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(12.6, 0.46, 0.62), matRidge);
+  ridgeBeam.position.set(0, 13.08, 0);
+  ridgeBeam.castShadow = true;
   group.add(ridgeBeam);
   occluders.push(ridgeBeam);
 
-  // 檐口
-  for (const dir of [-1, 1]) {
-    const eave = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2 + 4.6, 0.22, 1.1), matDarkWood);
-    eave.position.set(0, 6.5, dir * (roofDepth * 0.82));
-    group.add(eave);
-    occluders.push(eave);
+  const ridgeCap = new THREE.Mesh(new THREE.BoxGeometry(12.8, 0.12, 0.78), matGold);
+  ridgeCap.position.set(0, 13.34, 0);
+  group.add(ridgeCap);
+
+  for (const sx of [-1, 1]) {
+    // 鸱吻：一块弧形侧板（内凹曲线）+ 一根金尖，远看就是翘起来的吻兽
+    const s = new THREE.Shape();
+    s.moveTo(0, 0);
+    s.quadraticCurveTo(-0.32, 0.62, 0.12, 1.18);
+    s.quadraticCurveTo(0.34, 0.7, 0.42, 0.1);
+    s.lineTo(0.42, 0);
+    s.closePath();
+    const wen = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(s, { depth: 0.2, bevelEnabled: false, curveSegments: 8 }),
+      matRidge,
+    );
+    wen.position.set(sx * 6.3, 13.1, -0.1);
+    wen.rotation.y = sx > 0 ? Math.PI : 0;
+    wen.rotation.z = sx * 0.16;
+    wen.castShadow = true;
+    group.add(wen);
+
+    const horn = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.5, 6), matGold);
+    horn.position.set(sx * 6.68, 14.05, 0);
+    horn.rotation.z = sx * 0.5;
+    group.add(horn);
+  }
+
+  // 檐口：瓦口下面一道深棕压边，挡住薄薄的屋面断面。
+  // 必须比檐口线往里缩一点、往下沉一点，否则转角处会从屋面戳出来。
+  const eaveFrame: Array<[number, number, number, number]> = [
+    [27.8, 0.34, 0, 12.3],
+    [27.8, 0.34, 0, -12.3],
+    [0.34, 24.2, 14.1, 0],
+    [0.34, 24.2, -14.1, 0],
+  ];
+  for (const [w, d, x, z] of eaveFrame) {
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(w, 0.22, d), matDarkWood);
+    lip.position.set(x, EAVE_Y - 0.16, z);
+    group.add(lip);
+  }
+
+  // 天花上方的“围脊”：两檐之间一道彩画带 + 斗拱，从底下抬头能看到
+  for (const [len, x, z, rotY] of [
+    [27, 0, HALL_HD - 0.6, 0],
+    [27, 0, -HALL_HD + 0.6, 0],
+    [20, HALL_HW - 0.6, 0, Math.PI / 2],
+    [20, -HALL_HW + 0.6, 0, Math.PI / 2],
+  ] as Array<[number, number, number, number]>) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(len, 0.62, 0.28), caihuaMat(len));
+    band.position.set(x, EAVE_Y - 0.62, z);
+    band.rotation.y = rotY;
+    group.add(band);
   }
 
   // 天花板
@@ -293,6 +529,133 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     group.add(beam);
   }
 
+  // ————————————— 正立面（参考图：黄墙、红墙裙、格扇门、匾额、石栏杆）
+
+  /** 立面前檐所在平面 */
+  const FACE_Z = 10.35;
+  /** 檐柱所在平面 */
+  const PORCH_Z = 10.75;
+  /** 墙高（与 WALL_H 一致，屋顶从这里起坡） */
+  const FACE_H = 7.0;
+
+  // 中央门洞：宽 12.4，正好对齐殿前的石板路；引檐柱立在两旁
+  const DOOR_HW = 6.2;
+  const FACE_OUT = 13.5;
+
+  for (const sx of [-1, 1]) {
+    const w = FACE_OUT - DOOR_HW;
+    const cx = sx * (DOOR_HW + w / 2);
+
+    // 土黄墙体
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(w, FACE_H, 0.55), matWallOuter);
+    panel.position.set(cx, FACE_H / 2, FACE_Z);
+    panel.castShadow = true;
+    panel.receiveShadow = true;
+    group.add(panel);
+    occluders.push(panel);
+
+    // 红墙裙
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(w, 1.5, 0.62), matWallBase);
+    skirt.position.set(cx, 0.75, FACE_Z);
+    skirt.receiveShadow = true;
+    group.add(skirt);
+
+    // 格扇门窗：四扇，贴在墙面上
+    const doorMat = new THREE.MeshStandardMaterial({
+      map: (() => {
+        const t = latticeTex.clone();
+        t.needsUpdate = true;
+        t.repeat.set(4, 1);
+        return t;
+      })(),
+      roughness: 0.72,
+      metalness: 0.06,
+    });
+    const doors = new THREE.Mesh(new THREE.BoxGeometry(w - 1.5, 3.7, 0.16), doorMat);
+    doors.position.set(cx, 3.05, FACE_Z + 0.34);
+    group.add(doors);
+
+    // 门窗上下的红框（抹头/槛框）
+    for (const [yy, hh] of [
+      [1.2, 0.22],
+      [4.98, 0.26],
+    ] as Array<[number, number]>) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(w - 1.1, hh, 0.24), matVermilion);
+      bar.position.set(cx, yy, FACE_Z + 0.36);
+      group.add(bar);
+    }
+  }
+
+  // 檐柱：朱红圆柱 + 石础，立在月台边沿
+  for (const sx of [-1, 1]) {
+    for (const px of [DOOR_HW + 0.35, 12.6]) {
+      const x = sx * px;
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.4, FACE_H, 14), matVermilion);
+      col.position.set(x, FACE_H / 2, PORCH_Z);
+      col.castShadow = true;
+      group.add(col);
+
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.6, 0.34, 16), matStoneLight);
+      base.position.set(x, 0.17, PORCH_Z);
+      group.add(base);
+
+      obstacles.push({ x, z: PORCH_Z, r: 0.7 });
+    }
+  }
+
+  // 额枋：横跨整个正立面，同时兼作门洞上的门楣（参考图里这一条是彩画最醒目的地方）
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(FACE_OUT * 2, 0.86, 0.62), caihuaMat(FACE_OUT * 2));
+  lintel.position.set(0, 6.6, FACE_Z);
+  lintel.castShadow = true;
+  group.add(lintel);
+
+  // 匾额：金字「大雄寶殿」，紧贴在门楣下
+  const plaque = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.5, 1.76),
+    new THREE.MeshStandardMaterial({
+      map: plaqueTex,
+      roughness: 0.62,
+      metalness: 0.14,
+      emissive: new THREE.Color(0x2a1b08),
+    }),
+  );
+  plaque.position.set(0, 5.25, FACE_Z + 0.56);
+  group.add(plaque);
+
+  const plaqueBack = new THREE.Mesh(new THREE.BoxGeometry(4.85, 2.06, 0.18), matWallBase);
+  plaqueBack.position.set(0, 5.25, FACE_Z + 0.4);
+  plaqueBack.castShadow = true;
+  group.add(plaqueBack);
+
+  // 白石栏杆：月台前沿（门洞两侧）一排望柱 + 寻杖
+  for (const sx of [-1, 1]) {
+    const x0 = sx * 10.4;
+    const x1 = sx * 13.3;
+    const back = 0.2;
+    const railZ = STEP_Z0 - 0.2;
+
+    const n = 3;
+    for (let i = 0; i <= n; i++) {
+      const x = x0 + ((x1 - x0) * i) / n;
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, 1.02, 0.26), matStoneLight);
+      post.position.set(x, 0.51, railZ);
+      post.castShadow = true;
+      group.add(post);
+
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), matStoneLight);
+      knob.position.set(x, 1.08, railZ);
+      group.add(knob);
+    }
+
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) - 0.1, 0.16, 0.2), matStoneLight);
+    rail.position.set((x0 + x1) / 2, 0.78, railZ);
+    group.add(rail);
+
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) - 0.1, 0.14, 0.26), matStoneLight);
+    foot.position.set((x0 + x1) / 2, 0.2 + back, railZ);
+    group.add(foot);
+  }
+
   // ————————————— 柱子
 
   const pillarPositions: Array<[number, number]> = [
@@ -306,7 +669,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     [4.2, -8],
   ];
   for (const [x, z] of pillarPositions) {
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.37, CEIL, 14), matWood);
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.37, CEIL, 14), matVermilion);
     col.position.set(x, CEIL / 2, z);
     col.castShadow = true;
     col.receiveShadow = true;
@@ -805,15 +1168,15 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // ═══════════════════════════ 庭院 ═══════════════════════════
 
-  // 围墙
+  // 围墙（土黄墙 + 琉璃瓦压顶，与佛殿同色系）
   for (const sx of [-1, 1]) {
-    const w = new THREE.Mesh(new THREE.BoxGeometry(0.7, 3.0, WALL_Z - YARD_Z + 1), matWall);
+    const w = new THREE.Mesh(new THREE.BoxGeometry(0.7, 3.0, WALL_Z - YARD_Z + 1), matWallOuter);
     w.position.set(sx * WALL_X, YARD_Y + 1.5, (WALL_Z + YARD_Z) / 2);
     w.receiveShadow = true;
     w.castShadow = true;
     group.add(w);
 
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.16, WALL_Z - YARD_Z + 1), matTile);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.16, WALL_Z - YARD_Z + 1), matGlazed);
     cap.position.set(sx * WALL_X, YARD_Y + 3.06, (WALL_Z + YARD_Z) / 2);
     group.add(cap);
   }
@@ -822,7 +1185,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   for (const sx of [-1, 1]) {
     const wing = new THREE.Mesh(
       new THREE.BoxGeometry(WALL_X - HALL_HW - 0.4, 2.8, 0.6),
-      matWall,
+      matWallOuter,
     );
     wing.position.set(sx * (HALL_HW + (WALL_X - HALL_HW) / 2), YARD_Y + 1.4, 10.4);
     wing.castShadow = true;
@@ -845,14 +1208,14 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
     const gate = new THREE.Mesh(
       new THREE.ExtrudeGeometry(shape, { depth: 0.7, bevelEnabled: false, curveSegments: 24 }),
-      matWall,
+      matWallOuter,
     );
     gate.position.set(0, YARD_Y, WALL_Z);
     gate.castShadow = true;
     gate.receiveShadow = true;
     group.add(gate);
 
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL_X * 2, 0.18, 1.0), matTile);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL_X * 2, 0.18, 1.0), matGlazed);
     cap.position.set(0, YARD_Y + 3.45, WALL_Z + 0.35);
     group.add(cap);
   }
@@ -1477,7 +1840,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     occluders,
     ceilY: CEIL,
     walkRects: [
-      { x0: -HALL_HW + 0.9, x1: HALL_HW - 0.9, z0: -5.6, z1: STEP_Z0 },
+      // 殿内主区：正立面两侧已经被墙裙占住，走不到那么靠边
+      { x0: -HALL_HW + 0.9, x1: HALL_HW - 0.9, z0: -5.6, z1: 8.5 },
+      // 中央门洞：只有中间这一条能穿到殿内
+      { x0: -6.0, x1: 6.0, z0: 8.5, z1: STEP_Z0 },
       { x0: -HALL_HW + 0.9, x1: HALL_HW - 0.9, z0: STEP_Z0, z1: YARD_Z + 0.2 },
       { x0: -YARD_HW, x1: YARD_HW, z0: YARD_Z + 0.2, z1: YARD_END },
     ],
@@ -1493,6 +1859,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       glowTex.dispose();
       smokeTex.dispose();
       grassTex.dispose();
+      roofTex.dispose();
+      caihuaTex.dispose();
+      plaqueTex.dispose();
+      latticeTex.dispose();
       pathTex.dispose();
       renderer.shadowMap.enabled = true;
     },
