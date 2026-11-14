@@ -9,7 +9,6 @@ import {
   pathTexture,
   glazedRoofTexture,
   caihuaTexture,
-  plaqueTexture,
   latticeDoorTexture,
   roundWindowTexture,
 } from './textures';
@@ -221,7 +220,6 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const pathTex = pathTexture();
   const roofTex = glazedRoofTexture();
   const caihuaTex = caihuaTexture();
-  const plaqueTex = plaqueTexture('大雄寶殿');
   const latticeTex = latticeDoorTexture();
   const roundWinTex = roundWindowTexture();
 
@@ -680,23 +678,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   lintel.castShadow = true;
   group.add(lintel);
 
-  // 匾额：金字「大雄寶殿」，紧贴在门楣下
-  const plaque = new THREE.Mesh(
-    new THREE.PlaneGeometry(4.5, 1.76),
-    new THREE.MeshStandardMaterial({
-      map: plaqueTex,
-      roughness: 0.62,
-      metalness: 0.14,
-      emissive: new THREE.Color(0x2a1b08),
-    }),
-  );
-  plaque.position.set(0, 5.25, FACE_Z + 0.56);
-  group.add(plaque);
-
-  const plaqueBack = new THREE.Mesh(new THREE.BoxGeometry(4.85, 2.06, 0.18), matWallBase);
-  plaqueBack.position.set(0, 5.25, FACE_Z + 0.4);
-  plaqueBack.castShadow = true;
-  group.add(plaqueBack);
+  // 门洞上方不再挂匾额：只留一条彩画门楣，视线直接进殿
 
   // 白石栏杆：月台前沿（门洞两侧）一排望柱 + 寻杖
   for (const sx of [-1, 1]) {
@@ -1932,7 +1914,6 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       grassTex.dispose();
       roofTex.dispose();
       caihuaTex.dispose();
-      plaqueTex.dispose();
       latticeTex.dispose();
       roundWinTex.dispose();
       pathTex.dispose();
