@@ -11,6 +11,7 @@ import {
   caihuaTexture,
   plaqueTexture,
   latticeDoorTexture,
+  roundWindowTexture,
 } from './textures';
 
 export interface Cushion {
@@ -86,12 +87,15 @@ const ROOF_UV = 0.3;
 /**
  * 起脊屋顶：外圈矩形 → 内圈矩形（或退化成一条脊线）之间放样。
  *
- * 剖面用 t^1.5：靠檐一段平缓、近脊一段陡 —— 中式“反宇”的大致走势，
- * 比两块平板拼出来的屋顶好看很多，而面数只有 4 侧面 × 6 段 ≈ 48 个三角面。
+ * 剖面用 t^1.5：靠檐一段平缓、近脊一段陡 —— 中式“反宇”的大致走势。
+ * 檐口每边再细分 sideSegs 段，靠四个角抬起来，就是「檐角起翘 / 翼角」。
+ * （如果只留四个角点，檐口是直线，起翘无从表达，所以必须细分。）
  *
  * @param ow/od 檐口半宽/半深（外圈）
  * @param iw/id 内圈半宽/半深；id=0 就是一条正脊（庑殿/歇山的脊）
  * @param y0/y1 檐口高度 / 脊顶高度
+ * @param opts.cornerLift 檐角比檐边中部高多少米
+ * @param opts.lip 檐口压边（沿翘起的檐口线走一圈的竖向封边）
  */
 function hipRoof(
   ow: number,
@@ -101,42 +105,71 @@ function hipRoof(
   y0: number,
   y1: number,
   mat: THREE.Material,
-  segs = 6,
+  opts: {
+    segs?: number;
+    sideSegs?: number;
+    cornerLift?: number;
+    lip?: { h: number; mat: THREE.Material };
+  } = {},
 ): THREE.Mesh {
-  const ring = (t: number) => {
+  const segs = opts.segs ?? 6;
+  const ss = opts.sideSegs ?? 10;
+  const lift = opts.cornerLift ?? 0;
+  const N = ss * 4;
+
+  /** 檐口起翘系数：角上 = 1，边中点 = 0 */
+  const cornerWeight = (k: number) => Math.pow(1 - Math.min(k / ss, 1 - k / ss) * 2, 2.4);
+
+  const ringY = (t: number) => y0 + (y1 - y0) * Math.pow(t, 1.5);
+
+  /** 第 t 圈、第 i 个檐口采样点（i 沿周长绕一圈） */
+  const point = (t: number, i: number): [number, number, number] => {
     const w = ow + (iw - ow) * t;
     const d = od + (id - od) * t;
-    const y = y0 + (y1 - y0) * Math.pow(t, 1.5);
-    return [
-      [-w, y, d],
-      [w, y, d],
-      [w, y, -d],
-      [-w, y, -d],
-    ] as Array<[number, number, number]>;
+    const side = Math.floor(i / ss) % 4;
+    const k = i % ss;
+    const u = k / ss;
+
+    let x: number;
+    let z: number;
+    if (side === 0) {
+      x = -w + 2 * w * u;
+      z = d;
+    } else if (side === 1) {
+      x = w;
+      z = d - 2 * d * u;
+    } else if (side === 2) {
+      x = w - 2 * w * u;
+      z = -d;
+    } else {
+      x = -w;
+      z = -d + 2 * d * u;
+    }
+
+    // 越靠角、越靠檐口，抬得越多；到脊上就完全收住
+    const y = ringY(t) + lift * cornerWeight(k) * Math.pow(1 - t, 2.2);
+    return [x, y, z];
   };
 
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
 
-  const rings = Array.from({ length: segs + 1 }, (_, s) => ring(s / segs));
-
-  for (const r of rings) {
-    for (const [x, y, z] of r) {
+  for (let s = 0; s <= segs; s++) {
+    const t = s / segs;
+    for (let i = 0; i < N; i++) {
+      const [x, y, z] = point(t, i);
       pos.push(x, y, z);
       // 平面投射：瓦垄沿着坡面一致，不会在四个面上各转一个角度
       uv.push(x * ROOF_UV, z * ROOF_UV);
     }
   }
 
-  const V = (s: number, k: number) => s * 4 + (k % 4);
+  const V = (s: number, i: number) => s * N + (i % N);
   for (let s = 0; s < segs; s++) {
-    for (let k = 0; k < 4; k++) {
-      const a = V(s, k);
-      const b = V(s, k + 1);
-      const c = V(s + 1, k + 1);
-      const d = V(s + 1, k);
-      idx.push(a, b, c, a, c, d);
+    for (let i = 0; i < N; i++) {
+      idx.push(V(s, i), V(s, i + 1), V(s + 1, i + 1));
+      idx.push(V(s, i), V(s + 1, i + 1), V(s + 1, i));
     }
   }
 
@@ -146,7 +179,33 @@ function hipRoof(
   g.setIndex(idx);
   g.computeVertexNormals();
 
-  return new THREE.Mesh(g, mat);
+  const mesh = new THREE.Mesh(g, mat);
+
+  // 檐口压边：沿翘起来的檐口线拉一条竖带，挡住屋面的零厚度断面
+  if (opts.lip) {
+    const lipPos: number[] = [];
+    const lipIdx: number[] = [];
+    const h = opts.lip.h;
+    for (let i = 0; i < N; i++) {
+      const [x, y, z] = point(0, i);
+      lipPos.push(x, y - 0.02, z, x, y - h, z);
+    }
+    for (let i = 0; i < N; i++) {
+      const a = (i * 2) % (N * 2);
+      const b = ((i + 1) * 2) % (N * 2);
+      lipIdx.push(a, a + 1, b + 1, a, b + 1, b);
+    }
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lipPos, 3));
+    lg.setIndex(lipIdx);
+    lg.computeVertexNormals();
+
+    const lipMat = opts.lip.mat.clone();
+    lipMat.side = THREE.DoubleSide;
+    mesh.add(new THREE.Mesh(lg, lipMat));
+  }
+
+  return mesh;
 }
 
 export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Temple {
@@ -164,6 +223,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const caihuaTex = caihuaTexture();
   const plaqueTex = plaqueTexture('大雄寶殿');
   const latticeTex = latticeDoorTexture();
+  const roundWinTex = roundWindowTexture();
 
   // ————————————— 材质
 
@@ -415,24 +475,47 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     group.add(skirt);
   }
 
+  // 侧墙圆窗（月洞窗）：参考图侧面那几个圆窗，给大片黄墙一个呼吸点
+  const roundWinMat = new THREE.MeshStandardMaterial({
+    map: roundWinTex,
+    transparent: true,
+    alphaTest: 0.35,
+    roughness: 0.7,
+    metalness: 0.06,
+  });
+  for (const sx of [-1, 1]) {
+    for (const wz of [-4.5, 0, 4.5]) {
+      const win = new THREE.Mesh(new THREE.CircleGeometry(0.95, 30), roundWinMat);
+      win.position.set(sx * (HALL_HW + 0.48), 4.15, wz);
+      win.rotation.y = sx * (Math.PI / 2);
+      group.add(win);
+    }
+  }
+
   // ————————————— 屋顶：重檐（参考图的双层屋檐 + 暗色琉璃瓦）
 
   /** 下檐檐口高度 */
   const EAVE_Y = 7.0;
 
   // 下檐（腰檐）：挑出 2.4m，坡度约 27°，比第一版陡，免得看上去像一块平板
-  const roofLower = hipRoof(14.4, 12.6, 9.6, 7.4, EAVE_Y, 9.35, matGlazed);
+  const roofLower = hipRoof(14.4, 12.6, 9.6, 7.4, EAVE_Y, 9.35, matGlazed, {
+    cornerLift: 0.62,
+    lip: { h: 0.24, mat: matDarkWood },
+  });
   roofLower.castShadow = true;
   roofLower.receiveShadow = true;
   group.add(roofLower);
   occluders.push(roofLower);
 
   // 两层屋檐之间被遮住的墙，兼作“防穿帮”的封口
-  const clerestory = hipRoof(10.4, 8.3, 0.12, 0.12, 9.2, 9.8, matWallOuter, 3);
+  const clerestory = hipRoof(10.4, 8.3, 0.12, 0.12, 9.2, 9.8, matWallOuter, {
+    segs: 3,
+    sideSegs: 4,
+  });
   group.add(clerestory);
 
   // 上檐：收进去、抬得更高，整座殿才有“重檐”的高度感
-  const roofUpper = hipRoof(12.0, 10.0, 5.7, 0, 9.95, 13.0, matGlazed);
+  const roofUpper = hipRoof(12.0, 10.0, 5.7, 0, 9.95, 13.0, matGlazed, { cornerLift: 0.5 });
   roofUpper.castShadow = true;
   roofUpper.receiveShadow = true;
   group.add(roofUpper);
@@ -486,19 +569,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     group.add(horn);
   }
 
-  // 檐口：瓦口下面一道深棕压边，挡住薄薄的屋面断面。
-  // 必须比檐口线往里缩一点、往下沉一点，否则转角处会从屋面戳出来。
-  const eaveFrame: Array<[number, number, number, number]> = [
-    [27.8, 0.34, 0, 12.3],
-    [27.8, 0.34, 0, -12.3],
-    [0.34, 24.2, 14.1, 0],
-    [0.34, 24.2, -14.1, 0],
-  ];
-  for (const [w, d, x, z] of eaveFrame) {
-    const lip = new THREE.Mesh(new THREE.BoxGeometry(w, 0.22, d), matDarkWood);
-    lip.position.set(x, EAVE_Y - 0.16, z);
-    group.add(lip);
-  }
+  // （檐口压边现在由 hipRoof 的 lip 选项沿翘起的檐口线生成，不再用四个直盒子）
 
   // 天花上方的“围脊”：两檐之间一道彩画带 + 斗拱，从底下抬头能看到
   for (const [len, x, z, rotY] of [
@@ -1863,6 +1934,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       caihuaTex.dispose();
       plaqueTex.dispose();
       latticeTex.dispose();
+      roundWinTex.dispose();
       pathTex.dispose();
       renderer.shadowMap.enabled = true;
     },

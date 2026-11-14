@@ -500,3 +500,69 @@ export function latticeDoorTexture(): THREE.CanvasTexture {
   t.anisotropy = 8;
   return t;
 }
+
+/**
+ * 圆形窗（月洞窗）：深色窗心 + 金线冰裂纹 + 红框。
+ * 整块贴图自带边框，挂在墙上就是一扇圆窗，不用再拼环形几何。
+ */
+export function roundWindowTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const [c, ctx] = canvas(S);
+  const r = S / 2;
+
+  ctx.clearRect(0, 0, S, S);
+
+  // 窗心
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(r, r, r - 18, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.fillStyle = '#241110';
+  ctx.fillRect(0, 0, S, S);
+
+  // 冰裂纹：两组斜线交叉
+  const step = 26;
+  ctx.strokeStyle = 'rgba(198, 158, 92, 0.75)';
+  ctx.lineWidth = 2.2;
+  for (let i = -S; i < S * 2; i += step) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + S, S);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i - S, S);
+    ctx.stroke();
+  }
+
+  // 中心一个小团花
+  ctx.strokeStyle = 'rgba(212, 172, 102, 0.85)';
+  ctx.lineWidth = 2.6;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.ellipse(r + Math.cos(a) * 15, r + Math.sin(a) * 15, 13, 7, a, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // 红框（贴图里直接画，挂在墙上就是一个完整的圆窗）
+  ctx.beginPath();
+  ctx.arc(r, r, r - 9, 0, Math.PI * 2);
+  ctx.strokeStyle = '#8d2b22';
+  ctx.lineWidth = 18;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(r, r, r - 9, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(212, 172, 102, 0.55)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
