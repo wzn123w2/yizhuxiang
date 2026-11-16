@@ -4,12 +4,22 @@ import * as THREE from 'three';
 import { buildTemple, type Temple, type Cushion } from './world/temple';
 import { Monk, type Pose } from './world/monk';
 import { Controls } from './game/controls';
-import { AudioHost } from './audio/engine';
+import { AudioHost, isIOSLike } from './audio/engine';
 import { Sounds, Wind, Chant } from './audio/sounds';
 import { BeadsUI } from './ui/beads';
+import { WeatherVfx } from './world/weather';
+import { fetchWeather, WEATHER_ZH, type WeatherKind } from './core/weather';
 import { NetClient, type NetEventKind, type RemoteInfo } from './net/client';
 import { RemotePlayer } from './net/remote';
 import * as store from './core/save';
+import {
+  CHANGELOG,
+  latestNoticeId,
+  unseenEntries,
+  type ChangelogEntry,
+} from './core/changelog';
+import { drawFortune, type FortuneAlmanac, type FortuneLot } from './core/fortune';
+import { todayKey } from './core/device';
 import { randomDharmaName } from './core/name';
 
 // ————————————————————————————— DOM
@@ -38,6 +48,30 @@ const btnSound = $<HTMLButtonElement>('btn-sound');
 const btnService = $<HTMLButtonElement>('btn-service');
 const btnSettings = $<HTMLButtonElement>('btn-settings');
 const settingsEl = $('settings');
+const audioStateEl = $('audio-state');
+const btnFortune = $<HTMLButtonElement>('btn-fortune');
+const fortuneEl = $('fortune');
+const fortuneAlmanacEl = $('fortune-almanac');
+const fortuneLoadingEl = $('fortune-loading');
+const fortuneSlipEl = $('fortune-slip');
+const fortuneNoteEl = $('fortune-note');
+const fortuneOk = $<HTMLButtonElement>('fortune-ok');
+const fortuneNoEl = $('fortune-no');
+const fortuneGradeEl = $('fortune-grade');
+const fortuneTitleEl = $('fortune-lottitle');
+const fortuneVerseEl = $('fortune-verse');
+const fortuneReadEl = $('fortune-read');
+const fortuneTodayEl = $('fortune-today');
+
+const noticeEl = $('notice');
+const noticeBody = $('notice-body');
+const noticeTitle = $('notice-title');
+const noticeKicker = $('notice-kicker');
+const noticeOk = $<HTMLButtonElement>('notice-ok');
+
+const btnFeedback = $<HTMLButtonElement>('btn-feedback');
+const feedbackCard = $('feedback-card');
+const btnCopyMail = $<HTMLButtonElement>('btn-copy-mail');
 
 const fishPanel = $('fish-panel');
 const fishIcon = fishPanel.querySelector('.fish-icon') as HTMLElement;
@@ -85,6 +119,7 @@ let merit = save.merit;
 // ————————————————————————————— 相机 / 控制
 
 let temple: Temple;
+let weatherVfx: WeatherVfx;
 let monk: Monk;
 
 const controls = new Controls(
@@ -115,6 +150,7 @@ let sitting: Cushion | null = null;
 let moveTarget: THREE.Vector3 | null = null;
 let pendingSeat: Cushion | null = null;
 let pendingIncense = false;
+let pendingFortune = false;
 
 let bowing = false;
 let tempPose: { pose: Pose; until: number } | null = null;
@@ -306,6 +342,7 @@ async function boot() {
     });
   });
   cushionGroups = temple.cushions.map((c) => c.mesh.parent!).filter(Boolean);
+  weatherVfx = new WeatherVfx(scene, (x, z) => temple.groundHeightAt(x, z));
   loadBar.style.width = '52%';
   loadTip.textContent = '正在点亮佛前的灯…';
   await tick();
@@ -363,18 +400,25 @@ async function boot() {
   meritEl.textContent = String(merit);
   beadsCountEl.textContent = String(save.beads);
   updateDayNight();
+  void refreshWeather(true);
 
   // 相机碰撞要用到的遮挡物
   controls.occluders = temple.occluders;
 
   applySavedAudioState();
+  $('build-tag').textContent = `构建 ${__BUILD__}`;
+  refreshFortuneButton();
   // 称呼：首次来给一个法号（骰子可换）；以前存过的直接用自己的
   nameInput.value = save.name || (save.nameTouched ? '' : randomDharmaName());
   bindUI();
   onResize();
   window.addEventListener('resize', onResize);
+  window.setInterval(() => void refreshWeather(), 10 * 60_000);
 
   requestAnimationFrame(frame);
+
+  // 公告等首屏落稳再弹，别和开门动画抢
+  window.setTimeout(showUpdateNotice, 420);
 }
 
 const tick = (ms = 40) => new Promise((r) => window.setTimeout(r, ms));
@@ -416,13 +460,14 @@ function applySavedAudioState() {
   host.setVolume('amb', save.vol.amb);
   host.setVolume('chant', save.vol.chant);
   host.setVolume('sfx', save.vol.sfx);
+  // 让 AudioHost 也记住静音：重建上下文 / 切后台回来都不会把静音丢掉
+  host.setAllMuted(save.muted);
 
   (($('vol-amb') as HTMLInputElement).value = String(Math.round(save.vol.amb * 100)));
   (($('vol-chant') as HTMLInputElement).value = String(Math.round(save.vol.chant * 100)));
   (($('vol-sfx') as HTMLInputElement).value = String(Math.round(save.vol.sfx * 100)));
 
-  btnSound.textContent = save.muted ? '声音' : '静音';
-  btnSound.classList.toggle('on', !save.muted);
+  syncSoundButton();
 
   const note = $('storage-note');
   note.textContent = storageState.ok
@@ -439,28 +484,337 @@ async function enableAudio() {
   audioOn = true;
   wind.start();
   chant.start();
-  host.setAllMuted(false);
+  host.setAllMuted(save.muted);
+  if (audioStateEl) audioStateEl.textContent = describeAudio();
   return true;
+}
+
+function syncSoundButton() {
+  // 用动词而不是状态词：手机上最怕"看着是开着的、其实静音"
+  btnSound.textContent = save.muted ? '开启声音' : '关闭声音';
+  btnSound.classList.toggle('on', !save.muted);
+  if (audioStateEl) audioStateEl.textContent = describeAudio();
+}
+
+const FEEDBACK_MAIL = 'wzn123w2@126.com';
+
+/** 复制邮箱：优先用剪贴板 API，http 页面拿不到权限就退到 execCommand */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 退到下面 */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 手机上切后台 / 锁屏 / 来电之后，AudioContext 会停在 suspended 或 interrupted，
+ * 从此整页都不出声。凡是"该有声"的时刻都走这里：先叫醒上下文，再重启两条长音。
+ */
+async function reviveAudio(): Promise<boolean> {
+  await host.ensureAlive();
+  if (host.ctx.state !== 'running') return false;
+  audioOn = true;
+  wind.start();
+  chant.start();
+  host.setAllMuted(save.muted);
+  if (audioStateEl) audioStateEl.textContent = describeAudio();
+  return true;
+}
+
+const AUDIO_STATE_ZH: Record<string, string> = {
+  running: '运行中',
+  suspended: '已挂起',
+  interrupted: '被系统打断',
+  closed: '已关闭',
+};
+
+/** 设置面板里那行"音频状态"，不用开控制台就能看出卡在哪儿 */
+function describeAudio(): string {
+  if (!host) return '音频状态：未初始化';
+  const st = host.ctx.state as string;
+  const bits = [AUDIO_STATE_ZH[st] ?? st, save.muted || host.muted ? '静音中' : '有声'];
+  if (isIOSLike()) bits.push(host.sessionArmed ? '媒体通道已挂上' : '媒体通道未挂上');
+  return `音频状态：${bits.join(' · ')}`;
+}
+
+/** 量一下主输出 1 秒内的峰值，用来区分"没信号"和"有信号但听不见" */
+async function measureMasterPeak(ms: number): Promise<string> {
+  const ctx = host.ctx;
+  const a = ctx.createAnalyser();
+  a.fftSize = 2048;
+  host.master.connect(a);
+  const buf = new Float32Array(a.fftSize);
+  let peak = 0;
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    await new Promise((r) => window.setTimeout(r, 60));
+    a.getFloatTimeDomainData(buf);
+    for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i]));
+  }
+  host.master.disconnect(a);
+  return peak > 0.0001 ? `${(20 * Math.log10(peak)).toFixed(1)} dBFS` : '无信号';
+}
+
+async function audioSelfTest() {
+  audioStateEl.textContent = '音频状态：正在检测…';
+  const ok = await reviveAudio();
+  if (!ok) {
+    audioStateEl.textContent = `${describeAudio()} · 上下文起不来`;
+    toast('这台设备暂时无法开启声音');
+    return;
+  }
+  if (save.muted) {
+    // 自检也顺手把声音打开：用户点这个按钮，本来就是为了听见
+    save.muted = false;
+    host.setAllMuted(false);
+    store.persist(save);
+    syncSoundButton();
+  }
+  sounds.woodfish(1);
+  window.setTimeout(() => sounds.bell(196, 1), 380);
+  window.setTimeout(() => sounds.chime(1), 980);
+  const peak = await measureMasterPeak(1400);
+  audioStateEl.textContent = `${describeAudio()} · 主输出峰值 ${peak}`;
 }
 
 async function toggleSound() {
   if (!audioOn) {
     const ok = await enableAudio();
-    if (ok) {
-      save.muted = false;
-      store.persist(save);
-      btnSound.textContent = '静音';
-      btnSound.classList.add('on');
-      toast('声音已开启');
-    }
+    if (!ok) return;
+    save.muted = false;
+    host.setAllMuted(false);
+    store.persist(save);
+    syncSoundButton();
+    toast('声音已开启');
+    return;
+  }
+  if (save.muted && !(await reviveAudio())) {
+    // 想开声但上下文叫不醒：别把按钮切成"静音"，免得看着像好了其实没声
+    toast('这台设备暂时无法开启声音');
     return;
   }
   save.muted = !save.muted;
   host.setAllMuted(save.muted);
   store.persist(save);
-  btnSound.textContent = save.muted ? '声音' : '静音';
-  btnSound.classList.toggle('on', !save.muted);
+  syncSoundButton();
   toast(save.muted ? '已静音' : '声音已开启');
+}
+
+// ————————————————————————————— 更新公告
+
+/** 公告只当纯文本渲染：不拼 innerHTML，也不认任何标记 */
+function renderNotice(entries: ChangelogEntry[], title: string, kicker: string) {
+  noticeKicker.textContent = kicker;
+  noticeTitle.textContent = title;
+  noticeBody.textContent = '';
+  for (const e of entries) {
+    const wrap = document.createElement('div');
+    wrap.className = 'notice-entry';
+    const h = document.createElement('h3');
+    h.textContent = `${e.date} · ${e.title}`;
+    const ul = document.createElement('ul');
+    for (const item of e.items) {
+      const li = document.createElement('li');
+      li.textContent = item;
+      ul.appendChild(li);
+    }
+    wrap.append(h, ul);
+    noticeBody.appendChild(wrap);
+  }
+  noticeEl.classList.add('open');
+  noticeEl.setAttribute('aria-hidden', 'false');
+  noticeOk.focus({ preventScroll: true });
+}
+
+function closeNotice() {
+  if (!noticeEl.classList.contains('open')) return;
+  noticeEl.classList.remove('open');
+  noticeEl.setAttribute('aria-hidden', 'true');
+  noticeOk.blur();
+  // 关掉就算看过：下次只在有新 id 时才弹
+  save.noticeSeen = latestNoticeId();
+  store.persist(save);
+}
+
+/** 进页面时：只弹没看过的；没看过（新访客）就只看最新一条 */
+function showUpdateNotice() {
+  const entries = unseenEntries(save.noticeSeen);
+  if (!entries.length) return;
+  renderNotice(
+    entries,
+    entries.length > 1 ? '这几版都更新了什么' : '这次更新了什么',
+    '山寺 · 更新',
+  );
+}
+
+/** 设置里的「更新公告」：回顾最近几次 */
+function openChangelog() {
+  renderNotice(CHANGELOG.slice(0, 5), '更新公告', '山寺 · 最近几次更新');
+}
+
+// ————————————————————————————— 求签
+
+let fortuneAsking = false;
+
+/** 今天还没求过就在右上角点个小金点 */
+function refreshFortuneButton() {
+  btnFortune.classList.toggle('todo', save.lastFortuneDay !== todayKey());
+}
+
+function almanacRow(k: string, v: string): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'almanac-row';
+  const key = document.createElement('span');
+  key.className = 'k';
+  key.textContent = k;
+  const val = document.createElement('span');
+  val.textContent = v;
+  row.append(key, val);
+  return row;
+}
+
+function renderAlmanac(a: FortuneAlmanac) {
+  fortuneAlmanacEl.textContent = '';
+  const day = [a.lunar ? `农历${a.lunar}` : '', a.weekday].filter(Boolean).join(' · ');
+  fortuneAlmanacEl.append(
+    almanacRow('日子', day),
+    almanacRow('干支', `${a.ganzhi.year}年 ${a.ganzhi.month}月 ${a.ganzhi.day}日`),
+    almanacRow('值日', `${a.jianchu} · 日主${a.element}`),
+    almanacRow('宜', a.yi.join(' · ')),
+    almanacRow('忌', a.ji.join(' · ')),
+    almanacRow('冲煞', `冲${a.chong} · 煞${a.sha}`),
+  );
+}
+
+/** 签文只当纯文本渲染，不拼 innerHTML */
+function renderSlip(lot: FortuneLot) {
+  fortuneNoEl.textContent = `第 ${lot.no} 签`;
+  fortuneGradeEl.textContent = lot.grade;
+  fortuneTitleEl.textContent = lot.title;
+
+  fortuneVerseEl.textContent = '';
+  for (const line of lot.verse) {
+    const p = document.createElement('div');
+    p.textContent = line;
+    fortuneVerseEl.appendChild(p);
+  }
+
+  fortuneReadEl.textContent = lot.read;
+
+  fortuneTodayEl.textContent = '';
+  const label = document.createElement('b');
+  label.textContent = '今日行止 · ';
+  fortuneTodayEl.append(label, document.createTextNode(lot.today));
+
+  fortuneSlipEl.hidden = false;
+}
+
+function clockOf(t: number): string {
+  try {
+    return new Date(t).toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return '';
+  }
+}
+
+async function openFortune() {
+  if (fortuneAsking || fortuneEl.classList.contains('open')) return;
+  fortuneAsking = true;
+
+  fortuneEl.classList.add('open');
+  fortuneEl.setAttribute('aria-hidden', 'false');
+  fortuneAlmanacEl.textContent = '';
+  fortuneSlipEl.hidden = true;
+  fortuneOk.hidden = true;
+  fortuneNoteEl.textContent = '签文只作自省，不作吉凶断语。';
+  fortuneLoadingEl.hidden = false;
+
+  // 至少摇一会儿，别让签"秒出"
+  const started = performance.now();
+  const res = await drawFortune();
+  const wait = Math.max(0, 900 - (performance.now() - started));
+  if (wait) await new Promise((r) => window.setTimeout(r, wait));
+
+  fortuneLoadingEl.hidden = true;
+  fortuneAsking = false;
+
+  if (res.ok) {
+    renderAlmanac(res.almanac);
+    renderSlip(res.lot);
+    // 服务端给的日期就是"今天"：记下来，明天才有小金点
+    save.lastFortuneDay = res.almanac.date;
+    store.persist(save);
+    refreshFortuneButton();
+
+    fortuneNoteEl.textContent = res.first
+      ? '第一次求 · 明日可再求一签'
+      : `今日已求 · ${clockOf(res.drawnAt)} · 明日再来`;
+
+    if (res.first) {
+      // 竹签的哗啦声 → 一声磬
+      sounds.bead(0.45);
+      window.setTimeout(() => sounds.bead(0.55), 140);
+      window.setTimeout(() => sounds.bead(0.65), 290);
+      window.setTimeout(() => sounds.bell(196, 1), 760);
+    }
+  } else if (res.code === 'network') {
+    save.lastFortuneDay = todayKey();
+    store.persist(save);
+    refreshFortuneButton();
+    fortuneNoteEl.textContent = '这台网络今天已经求过了，明天再来。';
+  } else if (res.code === 'offline') {
+    fortuneNoteEl.textContent = '签筒还没备好 · 稍后再试。';
+  } else if (res.code === 'slow') {
+    fortuneNoteEl.textContent = '签筒有点忙 · 过一会儿再试。';
+  } else {
+    fortuneNoteEl.textContent = '这一签没出来 · 稍后再试。';
+  }
+
+  fortuneOk.hidden = false;
+  fortuneOk.focus({ preventScroll: true });
+}
+
+function closeFortune() {
+  if (!fortuneEl.classList.contains('open')) return;
+  fortuneEl.classList.remove('open');
+  fortuneEl.setAttribute('aria-hidden', 'true');
+}
+
+/** 点殿里的签筒：先走过去，到了再摇 */
+function goFortune() {
+  standUp();
+  pendingSeat = null;
+  pendingIncense = false;
+  setBeadPanel(false);
+  pendingFortune = true;
+  moveTarget = new THREE.Vector3(
+    temple.fortuneStand.position.x + 1.05,
+    0,
+    temple.fortuneStand.position.z + 0.65,
+  );
+  toast('走向签筒…');
 }
 
 // ————————————————————————————— UI 绑定
@@ -493,7 +847,36 @@ function bindUI() {
   btnBeadAuto.addEventListener('click', () => setBeadAuto(!beadsUI.isAuto));
   btnFishClose.addEventListener('click', () => setFishAuto(false));
 
-  btnSettings.addEventListener('click', () => settingsEl.classList.add('open'));
+  btnSettings.addEventListener('click', () => {
+    audioStateEl.textContent = describeAudio();
+    // 每次打开都收起反馈卡片，保持面板干净
+    feedbackCard.hidden = true;
+    btnFeedback.textContent = '问题反馈';
+    btnFeedback.setAttribute('aria-expanded', 'false');
+    settingsEl.classList.add('open');
+  });
+  $('btn-audio-test').addEventListener('click', () => void audioSelfTest());
+  btnFeedback.addEventListener('click', () => {
+    const open = feedbackCard.hidden;
+    feedbackCard.hidden = !open;
+    btnFeedback.textContent = open ? '收起' : '问题反馈';
+    btnFeedback.setAttribute('aria-expanded', String(open));
+  });
+  btnCopyMail.addEventListener('click', () => {
+    void copyText(FEEDBACK_MAIL).then((ok) => toast(ok ? '邮箱已复制' : FEEDBACK_MAIL));
+  });
+  btnFortune.addEventListener('click', () => void openFortune());
+  $('fortune-close').addEventListener('click', closeFortune);
+  fortuneOk.addEventListener('click', closeFortune);
+  fortuneEl.addEventListener('click', (e) => {
+    if (e.target === fortuneEl) closeFortune();
+  });
+
+  noticeOk.addEventListener('click', closeNotice);
+  noticeEl.addEventListener('click', (e) => {
+    if (e.target === noticeEl) closeNotice();
+  });
+  $('btn-changelog').addEventListener('click', openChangelog);
   $('btn-settings-close').addEventListener('click', () =>
     settingsEl.classList.remove('open'),
   );
@@ -508,8 +891,8 @@ function bindUI() {
         // 拖了滑块说明想听
         save.muted = false;
         host.setAllMuted(false);
-        btnSound.textContent = '静音';
-        btnSound.classList.add('on');
+        syncSoundButton();
+        void reviveAudio();
       }
       store.persist(save);
     });
@@ -538,6 +921,14 @@ function bindUI() {
       else setFishAuto(!fishAuto);
     }
     if (e.code === 'Escape') {
+      if (fortuneEl.classList.contains('open')) {
+        closeFortune();
+        return;
+      }
+      if (noticeEl.classList.contains('open')) {
+        closeNotice();
+        return;
+      }
       setBeadPanel(false);
       settingsEl.classList.remove('open');
     }
@@ -545,15 +936,25 @@ function bindUI() {
 
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden) return;
-    await host.ensureAlive();
-    if (audioOn && host.ctx.state === 'running') {
-      wind.start();
-      chant.start();
-      host.setAllMuted(save.muted);
-    }
     updateDayNight();
+    // 跨过零点再切回来时，求签的小金点要重新出现
+    refreshFortuneButton();
+    void refreshWeather();
+    if (audioOn) await reviveAudio();
   });
 
+  // 任何一次手势都顺手把上下文叫醒。iOS 只认手势里的 resume，
+  // 没有这一手的话，切后台回来后整页就永久没声了。
+  const kick = () => {
+    if (!audioOn || (host.ctx.state as string) === 'running') return;
+    void reviveAudio();
+  };
+  document.addEventListener('pointerdown', kick, true);
+  document.addEventListener('touchend', kick, true);
+  document.addEventListener('keydown', kick, true);
+  window.addEventListener('focus', kick);
+  // 微信内置浏览器要等 JSBridge 就绪才能真正出声
+  document.addEventListener('WeixinJSBridgeReady', kick, false);
 }
 
 async function onStart() {
@@ -591,12 +992,49 @@ async function onStart() {
 
 // ————————————————————————————— 昼夜
 
+// ————————————————————————————— 天气（北京）
+
+let weatherKind: WeatherKind = 'clear';
+let weatherLabel = WEATHER_ZH.clear;
+let weatherFetchedAt = 0;
+
+/** 山寺按北京时间过日子：昼夜、天气都以东八区为准 */
+function beijingHour(): number {
+  try {
+    return Number(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Shanghai',
+        hour: '2-digit',
+        hour12: false,
+      }).format(new Date(serverNow())),
+    );
+  } catch {
+    return new Date(serverNow()).getHours();
+  }
+}
+
+/**
+ * 每 10 分钟问一次北京天气；断网就沿用上一次的结果。
+ * 天气只影响观感，不阻塞任何交互，所以这里全部静默失败。
+ */
+async function refreshWeather(force = false) {
+  if (!force && Date.now() - weatherFetchedAt < 4 * 60_000) return;
+  const w = await fetchWeather();
+  weatherFetchedAt = Date.now();
+  if (!w) return;
+  weatherKind = w.kind;
+  weatherLabel = w.label || WEATHER_ZH[w.kind];
+  temple.setWeather(w.kind);
+  weatherVfx?.set(w.kind);
+  updateDayNight();
+}
+
 function updateDayNight() {
   // 用服务器时间，否则两个人可能一个看到白天一个看到夜里
-  const h = new Date(serverNow()).getHours();
+  const h = beijingHour();
   const night = h < 6 || h >= 18;
   temple.setNight(night);
-  daynightEl.textContent = night ? '夜' : '昼';
+  daynightEl.textContent = `${night ? '夜' : '昼'} · ${weatherLabel}`;
 }
 
 // ————————————————————————————— 交互动作
@@ -631,7 +1069,13 @@ function onTap(clientX: number, clientY: number) {
     return;
   }
 
-  // 4) 地面（殿内石板 / 庭院草地）
+  // 4) 签筒
+  if (raycaster.intersectObject(temple.fortuneStand, true).length) {
+    goFortune();
+    return;
+  }
+
+  // 5) 地面（殿内石板 / 庭院草地）
   const hit = raycaster.intersectObjects(temple.groundMeshes, false)[0];
   if (hit) walkTo(hit.point.clone());
 }
@@ -661,6 +1105,7 @@ function walkTo(p: THREE.Vector3) {
   canvas.style.cursor = '';
   pendingSeat = null;
   pendingIncense = false;
+  pendingFortune = false;
   setBeadPanel(false);
   moveTarget = clampToWalk(p.clone());
 }
@@ -674,6 +1119,7 @@ function sitOn(c: Cushion) {
   setActiveCushion(c);
   pendingSeat = c;
   pendingIncense = false;
+  pendingFortune = false;
   setBeadPanel(false);
   moveTarget = c.seat.clone();
 }
@@ -682,6 +1128,7 @@ function goIncense() {
   standUp();
   pendingSeat = null;
   setBeadPanel(false);
+  pendingFortune = false;
   pendingIncense = true;
   moveTarget = new THREE.Vector3(temple.burner.position.x + 1.15, 0, temple.burner.position.z + 0.2);
   toast('走向香炉…');
@@ -702,6 +1149,15 @@ function arrive() {
     // 跟服务端报备这张蒲团，被占了会被请起来
     mySeat = seatIndexOf(sitting);
     net?.claimSeat(mySeat);
+    return;
+  }
+  if (pendingFortune) {
+    setActiveCushion(null);
+    pendingFortune = false;
+    tempPose = { pose: 'anjali', until: performance.now() + 2000 };
+    const t = temple.fortuneStand.position;
+    monk.setFacing(Math.atan2(t.x - monk.root.position.x, t.z - monk.root.position.z));
+    void openFortune();
     return;
   }
   if (pendingIncense) {
@@ -1072,6 +1528,7 @@ function frame(now: number) {
   }
 
   temple.update(dt, t);
+  weatherVfx?.update(dt, t, camera.position.x, camera.position.z);
 
   // 镜头跟随
   const focusY = sitting ? 0.72 : 1.02;
@@ -1097,6 +1554,9 @@ function frame(now: number) {
   }
 
   requestAnimationFrame(frame);
+
+  // 公告等首屏落稳再弹，别和开门动画抢
+  window.setTimeout(showUpdateNotice, 420);
 }
 
 function updateMovement(dt: number) {
@@ -1124,6 +1584,7 @@ function updateMovement(dt: number) {
     moveTarget = null;
     pendingSeat = null;
     pendingIncense = false;
+    pendingFortune = false;
 
     const fwd = new THREE.Vector3();
     camera.getWorldDirection(fwd);
@@ -1217,6 +1678,38 @@ function onResize() {
     ];
   });
 
+// 调试：看天气粒子的当前状态
+;(window as any).__vfx = () => weatherVfx?.stats() ?? null;
+
+// 调试：强制切天气（自动化测试 / 看效果用）
+;(window as any).__weather = (kind: WeatherKind) => {
+  weatherKind = kind;
+  weatherLabel = WEATHER_ZH[kind] ?? kind;
+  temple.setWeather(kind);
+  weatherVfx?.set(kind);
+  updateDayNight();
+  return weatherLabel;
+};
+
+// 调试：让镜头和角色一起转向某个点（自动化测试用）
+;(window as any).__face = (x: number, z: number) => {
+  const a = Math.atan2(x - monk.root.position.x, z - monk.root.position.z);
+  controls.recenterBehind(a);
+  monk.setFacing(a);
+  return a;
+};
+
+// 调试：把殿门口的签筒投影到屏幕坐标，方便自动化测试点中
+;(window as any).__fs = () => {
+  const p = temple.fortuneStand.position.clone();
+  p.y += 1.2;
+  const v = p.project(camera);
+  return [
+    Math.round((v.x * 0.5 + 0.5) * window.innerWidth),
+    Math.round((-v.y * 0.5 + 0.5) * window.innerHeight),
+  ];
+};
+
 // 调试：量三档总线当前电平（dBFS），用来校平衡
 ;(window as any).__audio = async (ms = 1500) => {
   const ctx = host.ctx;
@@ -1241,7 +1734,13 @@ function onResize() {
     }
   }
   const db = (v: number) => (v > 0 ? +(20 * Math.log10(v)).toFixed(1) : -99);
-  const out: Record<string, unknown> = { state: ctx.state, vols: { ...save.vol }, muted: save.muted };
+  const out: Record<string, unknown> = {
+    state: ctx.state,
+    audioOn,
+    unlocked: host.unlocked,
+    vols: { ...save.vol },
+    muted: save.muted,
+  };
   for (const t of taps) {
     out[t.n] = { peakDb: db(t.peak), avgDb: db(t.sum / Math.max(1, t.k)) };
     buses[t.n].disconnect(t.a);

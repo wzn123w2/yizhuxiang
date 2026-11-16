@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { WeatherKind } from '../core/weather';
 import {
   stoneFloorTexture,
   woodTexture,
@@ -11,6 +12,14 @@ import {
   caihuaTexture,
   latticeDoorTexture,
   roundWindowTexture,
+  signTexture,
+  snowTexture,
+  bannerTexture,
+  valanceTexture,
+  cofferTexture,
+  interiorWallTexture,
+  drapeTexture,
+  altarClothTexture,
 } from './textures';
 
 export interface Cushion {
@@ -50,6 +59,8 @@ export interface Temple {
   cushions: Cushion[];
   burner: THREE.Object3D;
   woodfishStand: THREE.Object3D;
+  /** 签筒：走近点一下就求签 */
+  fortuneStand: THREE.Object3D;
   walkRects: WalkRect[];
   obstacles: Obstacle[];
   /** 会挡住镜头的建筑构件（相机碰撞用） */
@@ -60,6 +71,8 @@ export interface Temple {
   addIncense(): void;
   update(dt: number, t: number): void;
   setNight(night: boolean): void;
+  /** 晴 / 多云 / 阴 / 雨 / 雪……影响天空、雾、光照与雪盖 */
+  setWeather(kind: WeatherKind): void;
   dispose(): void;
 }
 
@@ -222,6 +235,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const caihuaTex = caihuaTexture();
   const latticeTex = latticeDoorTexture();
   const roundWinTex = roundWindowTexture();
+  const cofferTex = cofferTexture();
+  const interiorWallTex = interiorWallTexture();
 
   // ————————————— 材质
 
@@ -229,7 +244,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     map: floorTex,
     roughness: 0.9,
     metalness: 0.02,
-    color: 0x97a3b0,
+    color: 0xa8a69c,
   });
   const matStoneSolid = new THREE.MeshStandardMaterial({
     color: 0x6d7884,
@@ -254,9 +269,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     color: 0x5a4230,
   });
   const matWall = new THREE.MeshStandardMaterial({
-    map: wallTex,
-    roughness: 0.95,
-    color: 0xccd6e0,
+    map: interiorWallTex,
+    roughness: 0.92,
+    color: 0xffffff,
   });
   const matBronze = new THREE.MeshStandardMaterial({
     color: 0x3b3126,
@@ -585,7 +600,12 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   // 天花板
   const ceiling = new THREE.Mesh(
     new THREE.PlaneGeometry(HALL_HW * 2, HALL_HD * 2),
-    new THREE.MeshStandardMaterial({ color: 0x14181e, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({
+      map: cofferTex,
+      color: 0xc9b79c,
+      roughness: 0.9,
+      metalness: 0.02,
+    }),
   );
   ceiling.rotation.x = Math.PI / 2;
   ceiling.position.y = CEIL;
@@ -596,6 +616,192 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     const beam = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2, 0.32, 0.36), matDarkWood);
     beam.position.set(0, CEIL - 0.2, -HALL_HD + 2 + i * 4);
     group.add(beam);
+  }
+
+  // ————————————— 殿内墙面：红木墙裙 + 幡 + 佛前帷幔 + 壁灯
+  // 参考照片里殿内是暖木、黄绸幡、红帷幔、满顶彩画；原来四面灰墙确实太素
+
+  const matWainscot = new THREE.MeshStandardMaterial({
+    map: woodTex,
+    color: 0x8a4a34,
+    roughness: 0.68,
+    metalness: 0.05,
+  });
+  const WAINSCOT_H = 1.15;
+
+  // 后墙墙裙
+  {
+    const w = HALL_HW * 2 - 0.2;
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(w, WAINSCOT_H, 0.1), matWainscot);
+    skirt.position.set(0, WAINSCOT_H / 2, -HALL_HD + 0.4);
+    group.add(skirt);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.16), matGold);
+    rail.position.set(0, WAINSCOT_H + 0.035, -HALL_HD + 0.4);
+    group.add(rail);
+    for (let x = -HALL_HW + 2.4; x <= HALL_HW - 2.4; x += 2.4) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, WAINSCOT_H, 0.13), matDarkWood);
+      post.position.set(x, WAINSCOT_H / 2, -HALL_HD + 0.47);
+      group.add(post);
+    }
+  }
+
+  // 两侧墙裙
+  for (const sx of [-1, 1]) {
+    const d = HALL_HD * 2 - 0.2;
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, WAINSCOT_H, d), matWainscot);
+    skirt.position.set(sx * (HALL_HW - 0.4), WAINSCOT_H / 2, 0);
+    group.add(skirt);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.07, d), matGold);
+    rail.position.set(sx * (HALL_HW - 0.4), WAINSCOT_H + 0.035, 0);
+    group.add(rail);
+    for (let z = -HALL_HD + 2.4; z <= HALL_HD - 2.4; z += 2.4) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.13, WAINSCOT_H, 0.06), matDarkWood);
+      post.position.set(sx * (HALL_HW - 0.47), WAINSCOT_H / 2, z);
+      group.add(post);
+    }
+  }
+
+  // 幡：两侧各三条，佛前再挂两条
+  const bannerTexA = bannerTexture('#d9a63f');
+  const bannerTexB = bannerTexture('#c8842c');
+  const bannerMat = (tex: THREE.Texture) =>
+    new THREE.MeshStandardMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.08,
+      side: THREE.DoubleSide,
+      roughness: 0.9,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: tex,
+      emissiveIntensity: 0.12,
+    });
+
+  const banners: Array<{ x: number; z: number; ry: number; tex: THREE.Texture }> = [];
+  let bi = 0;
+  for (const sx of [-1, 1]) {
+    for (const z of [-7.2, -4.2, -1.2, 1.8, 4.8]) {
+      banners.push({
+        x: sx * (HALL_HW - 0.55),
+        z,
+        ry: sx > 0 ? -Math.PI / 2 : Math.PI / 2,
+        tex: bi++ % 2 ? bannerTexB : bannerTexA,
+      });
+    }
+  }
+  for (const x of [-8.2, 8.2]) {
+    banners.push({ x, z: -HALL_HD + 0.55, ry: 0, tex: bannerTexA });
+  }
+
+  for (const b of banners) {
+    const g = new THREE.Group();
+    g.position.set(b.x, 1.8, b.z);
+    g.rotation.y = b.ry;
+
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 4.3), bannerMat(b.tex));
+    plane.position.y = 2.15;
+    g.add(plane);
+
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.3, 8), matDarkWood);
+    rod.rotation.z = Math.PI / 2;
+    rod.position.y = 4.31;
+    g.add(rod);
+
+    group.add(g);
+  }
+
+  // 佛前红帷幔：贴着后墙、在佛像光背后面，下沿是扇贝形
+  const valanceTex = valanceTexture();
+  const valanceMat = new THREE.MeshStandardMaterial({
+    map: valanceTex,
+    transparent: true,
+    alphaTest: 0.06,
+    side: THREE.DoubleSide,
+    roughness: 0.9,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: valanceTex,
+    emissiveIntensity: 0.1,
+  });
+  const valance = new THREE.Mesh(new THREE.PlaneGeometry(14.2, 1.55), valanceMat);
+  valance.position.set(0, 5.62, -HALL_HD + 0.55);
+  group.add(valance);
+
+  // 帷幔两侧的深红垂幔，把佛龛框起来（参考照片里佛前是红绸围出的龛）
+  const drapeTex = drapeTexture();
+  const drapeMat = new THREE.MeshStandardMaterial({
+    map: drapeTex,
+    transparent: true,
+    alphaTest: 0.06,
+    side: THREE.DoubleSide,
+    roughness: 0.9,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: drapeTex,
+    emissiveIntensity: 0.08,
+  });
+  for (const sx of [-1, 1]) {
+    const drape = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 3.95), drapeMat);
+    drape.position.set(sx * 7.2, 4.45, -HALL_HD + 0.56);
+    group.add(drape);
+  }
+
+  // 三世佛背后的大红帐：把佛龛那一面墙衬成深红，而不是一片米白
+  const altarClothTex = altarClothTexture();
+  const altarClothMat = new THREE.MeshStandardMaterial({
+    map: altarClothTex,
+    roughness: 0.9,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: altarClothTex,
+    emissiveIntensity: 0.05,
+  });
+  const altarCloth = new THREE.Mesh(new THREE.PlaneGeometry(13.2, 3.95), altarClothMat);
+  altarCloth.position.set(0, 3.1, -HALL_HD + 0.52);
+  group.add(altarCloth);
+
+  // 壁灯：只有自发光 + 光晕，不加真实点光源，省手机的性能
+  const wallLanternMat = new THREE.MeshStandardMaterial({
+    color: 0x7a4520,
+    roughness: 0.6,
+    emissive: 0xffa858,
+    emissiveIntensity: 1.4,
+  });
+  for (const sx of [-1, 1]) {
+    for (const z of [-2.8, 2.8]) {
+      const g = new THREE.Group();
+      g.position.set(sx * (HALL_HW - 0.78), 3.45, z);
+
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.26, 0.5, 10),
+        wallLanternMat,
+      );
+      g.add(body);
+
+      for (const sy of [-1, 1]) {
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.14, 10), matDarkWood);
+        cap.position.y = sy * 0.3;
+        cap.rotation.x = sy > 0 ? Math.PI : 0;
+        g.add(cap);
+      }
+
+      // 横臂：从灯笼伸向墙面
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 6), matDarkWood);
+      arm.rotation.z = Math.PI / 2;
+      arm.position.set(sx * 0.4, 0.34, 0);
+      g.add(arm);
+
+      const glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: glowTex,
+          color: 0xffb070,
+          transparent: true,
+          opacity: 0.3,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      glow.scale.set(1.9, 1.9, 1);
+      g.add(glow);
+
+      group.add(g);
+    }
   }
 
   // ————————————— 正立面（参考图：黄墙、红墙裙、格扇门、匾额、石栏杆）
@@ -1220,6 +1426,125 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   group.add(woodfishStand);
   obstacles.push({ x: 6.5, z: 0.9, r: 0.95 });
 
+  // ————————————— 签筒（殿门口左手边，进门就能看见）
+
+  const fortuneStand = new THREE.Group();
+  fortuneStand.position.set(-7.6, 0, 7.4);
+  {
+    // 案
+    const table = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.8), matWood);
+    table.position.y = 0.84;
+    table.castShadow = true;
+    fortuneStand.add(table);
+
+    for (const [dx, dz] of [
+      [-0.48, -0.3],
+      [0.48, -0.3],
+      [-0.48, 0.3],
+      [0.48, 0.3],
+    ]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.84, 0.09), matDarkWood);
+      leg.position.set(dx, 0.42, dz);
+      leg.castShadow = true;
+      fortuneStand.add(leg);
+    }
+
+    // 签筒：竹筒 + 一把签
+    const bamboo = new THREE.MeshStandardMaterial({ color: 0x9a7a3f, roughness: 0.55 });
+    const bambooDark = new THREE.MeshStandardMaterial({ color: 0x6d5327, roughness: 0.7 });
+    const stickMat = new THREE.MeshStandardMaterial({ color: 0xd9c493, roughness: 0.6 });
+
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.155, 0.62, 16, 1, true), bamboo);
+    tube.position.y = 1.2;
+    tube.castShadow = true;
+    fortuneStand.add(tube);
+
+    const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.155, 16), bambooDark);
+    bottom.rotation.x = -Math.PI / 2;
+    bottom.position.y = 0.895;
+    fortuneStand.add(bottom);
+
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.175, 0.014, 6, 18), matGold);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 1.51;
+    fortuneStand.add(rim);
+
+    // 红绳捆在筒腰
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.168, 0.012, 6, 18), matVermilion);
+    band.rotation.x = Math.PI / 2;
+    band.position.y = 1.22;
+    fortuneStand.add(band);
+
+    for (let i = 0; i < 15; i++) {
+      const a = (i / 15) * Math.PI * 2;
+      const r = 0.03 + (i % 4) * 0.03;
+      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.46, 5), stickMat);
+      stick.position.set(Math.cos(a) * r, 1.63 + (i % 5) * 0.012, Math.sin(a) * r);
+      stick.rotation.z = (Math.random() - 0.5) * 0.12;
+      stick.rotation.x = (Math.random() - 0.5) * 0.12;
+      fortuneStand.add(stick);
+    }
+
+    // 牌子：两根柱子 + 横梁 + 竖排「求签」（牌子挂在横梁下，高出签筒，不挡视线）
+    const postMat = matDarkWood;
+    for (const dx of [-0.62, 0.62]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 3.3, 8), postMat);
+      post.position.set(dx, 1.65, -0.22);
+      post.castShadow = true;
+      fortuneStand.add(post);
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.07, 0.07), postMat);
+    beam.position.set(0, 3.28, -0.22);
+    fortuneStand.add(beam);
+
+    // 牌子用 Basic 材质：殿里再暗也看得清，像一块亮着的木牌
+    const signTex = signTexture('求签');
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.6, 1.15),
+      new THREE.MeshBasicMaterial({ map: signTex }),
+    );
+    sign.position.set(0, 2.6, -0.1);
+    fortuneStand.add(sign);
+    // 背面也贴一张，转身绕过来不会看到空白
+    const signBack = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.6, 1.15),
+      new THREE.MeshBasicMaterial({ map: signTex }),
+    );
+    signBack.rotation.y = Math.PI;
+    signBack.position.set(0, 2.6, -0.12);
+    fortuneStand.add(signBack);
+
+    // 一盏小小的暖光：夜里也能一眼看到这边
+    const lamp = new THREE.PointLight(0xffb877, 3.4, 5.2, 2);
+    lamp.position.set(0, 2.1, 0.1);
+    fortuneStand.add(lamp);
+
+    // 地上的一圈柔光：远处也能一眼看到这边有东西
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.4, 2.4),
+      new THREE.MeshBasicMaterial({
+        map: glowTexture('rgba(255, 206, 138, 0.55)', 'rgba(255, 170, 80, 0)'),
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.y = 0.012;
+    fortuneStand.add(glow);
+
+    // 拾取用的隐形大圆柱：手机上点窄小的签筒很难点中
+    const pick = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.95, 0.95, 2.3, 12),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+    );
+    pick.position.y = 1.15;
+    fortuneStand.add(pick);
+  }
+  group.add(fortuneStand);
+  obstacles.push({ x: -7.6, z: 7.4, r: 0.8 });
+
   // ————————————— 钟
 
   {
@@ -1714,7 +2039,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   sun.shadow.normalBias = 0.04;
   scene.add(sun);
 
-  const hallFill = new THREE.PointLight(0xa8c4e0, 8, 40, 1.4);
+  // 殿内的补光改成暖色：冷蓝补光会让灰墙显得阴
+  const hallFill = new THREE.PointLight(0xffcf9e, 11, 42, 1.5);
   hallFill.position.set(0, CEIL - 1.1, 3.5);
   scene.add(hallFill);
 
@@ -1725,7 +2051,65 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const fog = new THREE.FogExp2(0x93a6b8, 0.0085);
   scene.fog = fog;
 
-  // ————————————— 昼夜
+  // ————————————— 雪盖：地面 / 台阶 / 屋顶各盖一层白，统一淡入淡出
+
+  // 地面和屋顶用两张贴图：地面按平面 UV 多铺几遍，屋顶的 UV 已经是世界尺度的
+  const snowGroundTex = snowTexture();
+  snowGroundTex.repeat.set(26, 26);
+  const snowRoofTex = snowTexture();
+  snowRoofTex.repeat.set(1, 1);
+
+  const snowBase = {
+    roughness: 0.95,
+    metalness: 0,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  } as const;
+  const snowGroundMat = new THREE.MeshStandardMaterial({
+    ...snowBase,
+    map: snowGroundTex,
+    color: 0xe6edf5,
+  });
+  const snowRoofMat = new THREE.MeshStandardMaterial({
+    ...snowBase,
+    map: snowRoofTex,
+    color: 0xeaf1f8,
+  });
+  const snowMats = [snowGroundMat, snowRoofMat];
+  const snowGroup = new THREE.Group();
+  snowGroup.visible = false;
+  group.add(snowGroup);
+
+  const addSnowPlane = (w: number, h: number, x: number, y: number, z: number) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), snowGroundMat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(x, y, z);
+    snowGroup.add(m);
+  };
+  // 只盖庭院与台阶：殿里有屋顶，殿内地面不该积雪
+  addSnowPlane(120, 90, 0, YARD_Y + 0.022, 40);
+  for (let i = 0; i < 3; i++) {
+    addSnowPlane(20, 0.62, 0, -0.3 * (i + 1) + 0.03, 11.35 + i * 0.6);
+  }
+  // 屋顶：克隆屋顶几何，用同一份白雪材质盖上去（polygonOffset 防闪面）
+  for (const roof of [roofLower, roofUpper]) {
+    const cap = new THREE.Mesh(roof.geometry, snowRoofMat);
+    cap.position.copy(roof.position);
+    cap.rotation.copy(roof.rotation);
+    cap.scale.copy(roof.scale).multiplyScalar(1.002);
+    snowGroup.add(cap);
+  }
+  {
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(12.62, 0.48, 0.64), snowRoofMat);
+    cap.position.copy(ridgeBeam.position);
+    snowGroup.add(cap);
+  }
+
+  // ————————————— 昼夜与天气
 
   let nightTarget = 1;
   let night = 1;
@@ -1734,22 +2118,44 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     nightTarget = v ? 1 : 0;
   }
 
+  /** 一帧里的全套光照参数（数值 + 颜色），天气与昼夜都折进这里 */
+  interface Palette {
+    ambColor: THREE.Color;
+    ambI: number;
+    hemiSky: THREE.Color;
+    hemiGround: THREE.Color;
+    hemiI: number;
+    sunColor: THREE.Color;
+    sunI: number;
+    fog: THREE.Color;
+    fogD: number;
+    lantern: number;
+    altar: number;
+    halo: number;
+    skyTop: THREE.Color;
+    skyBottom: THREE.Color;
+    stars: number;
+    moon: number;
+    snow: number;
+  }
+
+  // 白天的基础值：在这次调亮之前，天空偏暗、雾也重
   const DAY = {
-    ambColor: new THREE.Color(0x93aac4),
-    ambI: 1.35,
-    hemiSky: new THREE.Color(0xb8cde4),
-    hemiGround: new THREE.Color(0x4a4438),
-    hemiI: 1.15,
-    sunColor: new THREE.Color(0xffe8c8),
-    sunI: 2.25,
+    ambColor: new THREE.Color(0x9fb6cf),
+    ambI: 1.5,
+    hemiSky: new THREE.Color(0xbcd3ea),
+    hemiGround: new THREE.Color(0x4d4638),
+    hemiI: 1.2,
+    sunColor: new THREE.Color(0xfff1d8),
+    sunI: 2.55,
     sunPos: new THREE.Vector3(18, 26, 24),
-    fog: new THREE.Color(0x93a6b8),
-    fogD: 0.0085,
+    fog: new THREE.Color(0xbfd4e4),
+    fogD: 0.005,
     lantern: 0.32,
     altar: 0.5,
     halo: 0.55,
-    skyTop: new THREE.Color(0x5f88bd),
-    skyBottom: new THREE.Color(0xd6e2ea),
+    skyTop: new THREE.Color(0x3f8bd8),
+    skyBottom: new THREE.Color(0xd3ecfb),
     stars: 0,
     moon: 0,
   };
@@ -1773,55 +2179,212 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     moon: 1,
   };
 
-  const tmp = new THREE.Color();
+  /**
+   * 天气对白天的影响。只覆盖需要变的那几项，其余沿用 DAY。
+   * 雨/雪/阴天把天空压向灰蓝，雾更浓、太阳更弱；晴天把雾压到很薄、天空更通透。
+   */
+  const WEATHER_DAY: Record<WeatherKind, Partial<Palette>> = {
+    clear: {
+      skyTop: new THREE.Color(0x2f86d6),
+      skyBottom: new THREE.Color(0xd8f0fc),
+      fog: new THREE.Color(0xc9deed),
+      fogD: 0.0038,
+      sunI: 2.75,
+      ambI: 1.55,
+      hemiI: 1.3,
+    },
+    partly: {
+      skyTop: new THREE.Color(0x4c8fce),
+      skyBottom: new THREE.Color(0xd0e4f2),
+      fog: new THREE.Color(0xc6d9e6),
+      fogD: 0.005,
+      sunI: 2.3,
+      ambI: 1.48,
+    },
+    cloudy: {
+      skyTop: new THREE.Color(0x6b93b8),
+      skyBottom: new THREE.Color(0xcfdce6),
+      fog: new THREE.Color(0xc2cfda),
+      fogD: 0.0068,
+      sunI: 1.75,
+      sunColor: new THREE.Color(0xf2f0e6),
+      ambI: 1.44,
+    },
+    overcast: {
+      skyTop: new THREE.Color(0x7e8d99),
+      skyBottom: new THREE.Color(0xbcc7cf),
+      fog: new THREE.Color(0xb4bfc8),
+      fogD: 0.0088,
+      sunI: 1.05,
+      sunColor: new THREE.Color(0xdfe6ec),
+      ambI: 1.4,
+      hemiI: 1.16,
+    },
+    fog: {
+      skyTop: new THREE.Color(0x9aa7b0),
+      skyBottom: new THREE.Color(0xd0d8dd),
+      fog: new THREE.Color(0xd0d8dd),
+      fogD: 0.017,
+      sunI: 0.8,
+      sunColor: new THREE.Color(0xe4e9ec),
+      ambI: 1.42,
+    },
+    rain: {
+      skyTop: new THREE.Color(0x4f6070),
+      skyBottom: new THREE.Color(0x93a1ac),
+      fog: new THREE.Color(0x94a2ad),
+      fogD: 0.011,
+      sunI: 0.95,
+      sunColor: new THREE.Color(0xd7e0e8),
+      ambI: 1.38,
+      hemiI: 1.14,
+    },
+    snow: {
+      skyTop: new THREE.Color(0x7d93a8),
+      skyBottom: new THREE.Color(0xd6e1ea),
+      fog: new THREE.Color(0xc9d6e0),
+      fogD: 0.012,
+      sunI: 1.0,
+      sunColor: new THREE.Color(0xeaf1f6),
+      ambI: 1.5,
+      hemiI: 1.28,
+    },
+    thunder: {
+      skyTop: new THREE.Color(0x333f4b),
+      skyBottom: new THREE.Color(0x6c7885),
+      fog: new THREE.Color(0x6f7b87),
+      fogD: 0.013,
+      sunI: 0.7,
+      sunColor: new THREE.Color(0xc9d4de),
+      ambI: 1.28,
+      hemiI: 1.06,
+    },
+  };
 
-  function applyLighting(n: number) {
-    ambient.color.lerpColors(DAY.ambColor, NIGHT.ambColor, n);
-    ambient.intensity = DAY.ambI + (NIGHT.ambI - DAY.ambI) * n;
-
-    hemi.color.lerpColors(DAY.hemiSky, NIGHT.hemiSky, n);
-    hemi.groundColor.lerpColors(DAY.hemiGround, NIGHT.hemiGround, n);
-    hemi.intensity = DAY.hemiI + (NIGHT.hemiI - DAY.hemiI) * n;
-
-    sun.color.lerpColors(DAY.sunColor, NIGHT.sunColor, n);
-    sun.intensity = DAY.sunI + (NIGHT.sunI - DAY.sunI) * n;
-    sun.position.lerpVectors(DAY.sunPos, NIGHT.sunPos, n);
-
-    tmp.lerpColors(DAY.fog, NIGHT.fog, n);
-    fog.color.copy(tmp);
-    fog.density = DAY.fogD + (NIGHT.fogD - DAY.fogD) * n;
-
-    const lan = DAY.lantern + (NIGHT.lantern - DAY.lantern) * n;
-    for (const l of lanterns) {
-      l.userData.base = 15 * lan * ((l.userData.baseFactor as number) ?? 1);
-    }
-    altarLight.intensity = 10 * (DAY.altar + (NIGHT.altar - DAY.altar) * n);
-    hallFill.intensity = 9 + 5 * n;
-
-    const haloK = DAY.halo + (NIGHT.halo - DAY.halo) * n;
-    haloMat.opacity = 0.4 * haloK;
-    for (const m of mandorlaMats) {
-      m.opacity = ((m.userData.base as number) ?? 0.14) * haloK;
-    }
-    (haloGlow.material as THREE.SpriteMaterial).opacity = 0.42 * haloK;
-    backGlow.intensity = 14 + 16 * n;
-
-    skyUniforms.topColor.value.lerpColors(DAY.skyTop, NIGHT.skyTop, n);
-    skyUniforms.bottomColor.value.lerpColors(DAY.skyBottom, NIGHT.skyBottom, n);
-    starMat.opacity = DAY.stars + (NIGHT.stars - DAY.stars) * n;
-    (moonSprite.material as THREE.SpriteMaterial).opacity = 0.25 + n * 0.75;
-    (moonDisc.material as THREE.SpriteMaterial).opacity = 0.3 + n * 0.7;
+  function blankPalette(): Palette {
+    return {
+      ambColor: new THREE.Color(),
+      ambI: 1,
+      hemiSky: new THREE.Color(),
+      hemiGround: new THREE.Color(),
+      hemiI: 1,
+      sunColor: new THREE.Color(),
+      sunI: 1,
+      fog: new THREE.Color(),
+      fogD: 0.01,
+      lantern: 1,
+      altar: 1,
+      halo: 1,
+      skyTop: new THREE.Color(),
+      skyBottom: new THREE.Color(),
+      stars: 0,
+      moon: 0,
+      snow: 0,
+    };
   }
 
-  applyLighting(night);
+  function writePalette(out: Palette, n: number, kind: WeatherKind) {
+    const w = WEATHER_DAY[kind] ?? {};
+    out.ambColor.lerpColors(w.ambColor ?? DAY.ambColor, NIGHT.ambColor, n);
+    out.ambI = (w.ambI ?? DAY.ambI) + (NIGHT.ambI - (w.ambI ?? DAY.ambI)) * n;
+    out.hemiSky.lerpColors(w.hemiSky ?? DAY.hemiSky, NIGHT.hemiSky, n);
+    out.hemiGround.lerpColors(w.hemiGround ?? DAY.hemiGround, NIGHT.hemiGround, n);
+    out.hemiI = (w.hemiI ?? DAY.hemiI) + (NIGHT.hemiI - (w.hemiI ?? DAY.hemiI)) * n;
+    out.sunColor.lerpColors(w.sunColor ?? DAY.sunColor, NIGHT.sunColor, n);
+    out.sunI = (w.sunI ?? DAY.sunI) + (NIGHT.sunI - (w.sunI ?? DAY.sunI)) * n;
+    out.fog.lerpColors(w.fog ?? DAY.fog, NIGHT.fog, n);
+    out.fogD = (w.fogD ?? DAY.fogD) + (NIGHT.fogD - (w.fogD ?? DAY.fogD)) * n;
+    out.lantern = DAY.lantern + (NIGHT.lantern - DAY.lantern) * n;
+    out.altar = DAY.altar + (NIGHT.altar - DAY.altar) * n;
+    out.halo = DAY.halo + (NIGHT.halo - DAY.halo) * n;
+    out.skyTop.lerpColors(w.skyTop ?? DAY.skyTop, NIGHT.skyTop, n);
+    out.skyBottom.lerpColors(w.skyBottom ?? DAY.skyBottom, NIGHT.skyBottom, n);
+
+    const starK =
+      kind === 'clear' ? 1 : kind === 'partly' ? 0.55 : kind === 'cloudy' ? 0.12 : 0;
+    const moonK =
+      kind === 'clear' ? 1 : kind === 'partly' ? 0.7 : kind === 'cloudy' ? 0.3 : 0;
+    out.stars = NIGHT.stars * n * starK;
+    out.moon = n * moonK;
+    out.snow = kind === 'snow' ? 1 : 0;
+  }
+
+  function lerpPalette(cur: Palette, tgt: Palette, k: number) {
+    cur.ambColor.lerp(tgt.ambColor, k);
+    cur.ambI += (tgt.ambI - cur.ambI) * k;
+    cur.hemiSky.lerp(tgt.hemiSky, k);
+    cur.hemiGround.lerp(tgt.hemiGround, k);
+    cur.hemiI += (tgt.hemiI - cur.hemiI) * k;
+    cur.sunColor.lerp(tgt.sunColor, k);
+    cur.sunI += (tgt.sunI - cur.sunI) * k;
+    cur.fog.lerp(tgt.fog, k);
+    cur.fogD += (tgt.fogD - cur.fogD) * k;
+    cur.lantern += (tgt.lantern - cur.lantern) * k;
+    cur.altar += (tgt.altar - cur.altar) * k;
+    cur.halo += (tgt.halo - cur.halo) * k;
+    cur.skyTop.lerp(tgt.skyTop, k);
+    cur.skyBottom.lerp(tgt.skyBottom, k);
+    cur.stars += (tgt.stars - cur.stars) * k;
+    cur.moon += (tgt.moon - cur.moon) * k;
+    cur.snow += (tgt.snow - cur.snow) * k;
+  }
+
+  function applyPalette(p: Palette) {
+    ambient.color.copy(p.ambColor);
+    ambient.intensity = p.ambI;
+
+    hemi.color.copy(p.hemiSky);
+    hemi.groundColor.copy(p.hemiGround);
+    hemi.intensity = p.hemiI;
+
+    sun.color.copy(p.sunColor);
+    sun.intensity = p.sunI;
+    sun.position.lerpVectors(DAY.sunPos, NIGHT.sunPos, night);
+
+    fog.color.copy(p.fog);
+    fog.density = p.fogD;
+
+    for (const l of lanterns) {
+      l.userData.base = 15 * p.lantern * ((l.userData.baseFactor as number) ?? 1);
+    }
+    altarLight.intensity = 10 * p.altar;
+    hallFill.intensity = 15 + 6 * night;
+
+    haloMat.opacity = 0.4 * p.halo;
+    for (const m of mandorlaMats) {
+      m.opacity = ((m.userData.base as number) ?? 0.14) * p.halo;
+    }
+    (haloGlow.material as THREE.SpriteMaterial).opacity = 0.42 * p.halo;
+    backGlow.intensity = 14 + 16 * night;
+
+    skyUniforms.topColor.value.copy(p.skyTop);
+    skyUniforms.bottomColor.value.copy(p.skyBottom);
+    starMat.opacity = p.stars;
+    (moonSprite.material as THREE.SpriteMaterial).opacity = 0.25 + p.moon * 0.75;
+    (moonDisc.material as THREE.SpriteMaterial).opacity = 0.3 + p.moon * 0.7;
+
+    for (const m of snowMats) m.opacity = p.snow * 0.96;
+    snowGroup.visible = p.snow > 0.01;
+  }
+
+  const curPal = blankPalette();
+  const tgtPal = blankPalette();
+  let weather: WeatherKind = 'clear';
+
+  function setWeather(kind: WeatherKind) {
+    weather = kind;
+  }
+
+  writePalette(curPal, night, weather);
+  applyPalette(curPal);
 
   // ————————————— 更新
 
   function update(dt: number, t: number) {
-    if (Math.abs(night - nightTarget) > 0.001) {
-      night += (nightTarget - night) * Math.min(1, dt * 1.2);
-      applyLighting(night);
-    }
+    night += (nightTarget - night) * Math.min(1, dt * 1.2);
+    writePalette(tgtPal, night, weather);
+    lerpPalette(curPal, tgtPal, Math.min(1, dt * 1.6));
+    applyPalette(curPal);
 
     lanterns.forEach((l, i) => {
       const base = (l.userData.base as number) ?? 15;
@@ -1930,6 +2493,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     cushions,
     burner,
     woodfishStand,
+    fortuneStand,
     occluders,
     ceilY: CEIL,
     walkRects: [
@@ -1945,6 +2509,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     addIncense,
     update,
     setNight,
+    setWeather,
     dispose() {
       floorTex.dispose();
       woodTex.dispose();

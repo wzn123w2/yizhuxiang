@@ -66,6 +66,7 @@
         <small id="daynight">夜</small>
       </div>
       <div class="top-actions">
+        <button id="btn-fortune" class="pill fortune todo" type="button">求签</button>
         <button id="btn-service" class="pill" type="button">上香</button>
         <button id="btn-sound" class="pill" type="button">声音</button>
         <button id="btn-settings" class="pill icon" type="button" aria-label="设置">⋯</button>
@@ -132,10 +133,69 @@
       <label>诵经 <input id="vol-chant" type="range" min="0" max="100" value="62" /></label>
       <label>交互音效 <input id="vol-sfx" type="range" min="0" max="100" value="70" /></label>
       <div class="hint-row">首次进入默认静音，之后会记住你的偏好。</div>
+      <div class="hint-row" id="audio-state">音频状态：—</div>
+      <button id="btn-audio-test" class="ghost" type="button">试听 · 声音自检</button>
+      <div class="hint-row">
+        手机听不到时按顺序查：① iPhone 侧边静音键（现在会尽量绕开）② 微信「我 → 设置 → 通用 → 听筒模式」关掉
+        ③ 系统媒体音量 ④ 微信里先点右上「开启声音」，再点这里的试听。
+      </div>
+      <h3>反馈</h3>
+      <button id="btn-feedback" class="ghost" type="button" aria-expanded="false"
+        aria-controls="feedback-card">问题反馈</button>
+      <div id="feedback-card" class="feedback-card" hidden>
+        <p class="feedback-label">哪里不顺手、想要什么、声音有没有问题，写信给我：</p>
+        <a class="feedback-mail" href="mailto:wzn123w2@126.com?subject=%E5%B1%B1%E5%AF%BA%C2%B7%E5%8F%8D%E9%A6%88">wzn123w2@126.com</a>
+        <button id="btn-copy-mail" class="ghost" type="button">复制邮箱</button>
+      </div>
+
       <h3>其他</h3>
+      <button id="btn-changelog" class="ghost" type="button">更新公告</button>
       <button id="btn-reset" class="ghost" type="button">清空累计数</button>
       <div class="hint-row" id="storage-note"></div>
+      <div class="hint-row" id="build-tag"></div>
       <button id="btn-settings-close" class="primary small" type="button">好</button>
+    </section>
+
+    <!-- 更新公告 -->
+    <section id="notice" class="notice" role="dialog" aria-modal="true"
+      aria-labelledby="notice-title" aria-hidden="true">
+      <div class="notice-card">
+        <p class="eyebrow" id="notice-kicker">山寺 · 更新</p>
+        <h2 id="notice-title">这次更新了什么</h2>
+        <div id="notice-body"></div>
+        <button id="notice-ok" class="primary small" type="button">知道了</button>
+      </div>
+    </section>
+
+    <!-- 求签 -->
+    <section id="fortune" class="fortune" role="dialog" aria-modal="true"
+      aria-labelledby="fortune-title" aria-hidden="true">
+      <div class="fortune-card">
+        <button id="fortune-close" class="fortune-x" type="button" aria-label="收起">×</button>
+        <p class="eyebrow">山寺 · 今日一签</p>
+        <h2 id="fortune-title">签筒</h2>
+
+        <div id="fortune-almanac" class="fortune-almanac"></div>
+
+        <div id="fortune-loading" class="fortune-loading">
+          <div class="tube"><span></span><span></span><span></span></div>
+          <p>正在摇签…</p>
+        </div>
+
+        <div id="fortune-slip" class="fortune-slip" hidden>
+          <div class="slip-head">
+            <span id="fortune-no" class="no"></span>
+            <b id="fortune-grade" class="grade"></b>
+            <span id="fortune-lottitle" class="t"></span>
+          </div>
+          <div id="fortune-verse" class="fortune-verse"></div>
+          <p id="fortune-read" class="fortune-read"></p>
+          <p id="fortune-today" class="fortune-today"></p>
+        </div>
+
+        <p id="fortune-note" class="fortune-note">签文只作自省，不作吉凶断语。</p>
+        <button id="fortune-ok" class="primary small" type="button" hidden>收好</button>
+      </div>
     </section>
 
     <!-- 飘字层 -->

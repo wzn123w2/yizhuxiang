@@ -112,6 +112,12 @@ chown -R "$RUN_USER:$RUN_USER" "$APP_DIR/dist" "$APP_DIR/server"
 chmod -R a+rX "$APP_DIR/dist" "$APP_DIR/server"
 ok "$RUN_USER 可读 dist/ 与 server/"
 
+# 签筒数据目录：运行时唯一需要写的地方（权限 700，只给运行用户）
+mkdir -p "$APP_DIR/data"
+chown -R "$RUN_USER:$RUN_USER" "$APP_DIR/data"
+chmod 700 "$APP_DIR/data"
+ok "签筒数据目录：$APP_DIR/data"
+
 # ————————————————————————————— 5. systemd
 
 log "5/7 安装并启动 systemd 服务"
@@ -127,6 +133,8 @@ WorkingDirectory=$APP_DIR
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
 Environment=MAX_PLAYERS=12
+# 本脚本装的是本机反代，所以默认打开；服务端只信"来自身 127.0.0.1"的 X-Forwarded-For
+Environment=TRUST_PROXY=1
 ExecStart=$(command -v node) server/index.mjs
 Restart=always
 RestartSec=2

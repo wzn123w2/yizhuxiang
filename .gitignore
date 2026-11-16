@@ -7,3 +7,5 @@ dist/
 !.env.example
 coverage/
 .vite/
+# 签筒与运行时数据
+data/

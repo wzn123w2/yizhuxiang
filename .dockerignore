@@ -8,3 +8,4 @@ dist
 .env.*
 deploy
 README.md
+data

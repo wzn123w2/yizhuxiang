@@ -12,6 +12,10 @@ export interface Save {
   nameTouched: boolean;
   /** 三档音量的平衡方案版本：2 才代表“环境音压下去、诵经提上来”那一版 */
   volV?: number;
+  /** 已经看过哪一条更新公告（changelog 的 id），用来决定下次还弹不弹 */
+  noticeSeen?: string;
+  /** 最近一次求签的日期（东八区 YYYY-MM-DD），只用来决定右上角的小金点 */
+  lastFortuneDay?: string;
   createdAt: number;
 }
 
@@ -32,6 +36,8 @@ function empty(): Save {
     name: '',
     nameTouched: false,
     volV: VOL_BALANCE,
+    noticeSeen: '',
+    lastFortuneDay: '',
     createdAt: Date.now(),
   };
 }

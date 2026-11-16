@@ -16,10 +16,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { createFortuneBox } from './fortune.mjs';
+import { createWeatherBox } from './weather.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DIST = path.resolve(HERE, '..', 'dist');
+const ROOT = path.resolve(HERE, '..');
+const DIST = path.join(ROOT, 'dist');
 
 /** 快照频率（ms）：66 ≈ 15Hz，休闲场景够了 */
 const TICK_MS = 66;
@@ -113,10 +116,29 @@ function serveStatic(req, res) {
   });
 }
 
+/** 签筒：POST /api/fortune（同一天同一设备只出一支签） */
+const fortune = createFortuneBox({
+  root: ROOT,
+  trustProxy: process.env.TRUST_PROXY === '1',
+  log: (m) => console.info(m),
+});
+if (!fortune.writable) console.warn(`[fortune] ${fortune.dataDir} 不可写：抽签照常，只是不留记录`);
+
+/** 天气：GET /api/weather（北京，缓存 10 分钟，断网时退回上一次/晴天） */
+const weather = createWeatherBox({ log: (m) => console.info(m) });
+
 const httpServer = http.createServer((req, res) => {
   if (req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, players: players.size, seats: seats.size }));
+    return;
+  }
+  if (weather.handle(req, res, process.env.TRUST_PROXY === '1')) return;
+  if (fortune.handle(req, res)) return;
+  // 未知接口不再落到静态页（SPA 兜底只服务页面）
+  if (new URL(req.url || '/', 'http://x').pathname.startsWith('/api/')) {
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end('{"ok":false,"code":"not_found"}');
     return;
   }
   serveStatic(req, res);

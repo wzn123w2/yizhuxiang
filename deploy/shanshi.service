@@ -21,6 +21,8 @@ WorkingDirectory=/srv/shanshi
 Environment=NODE_ENV=production
 Environment=PORT=8787
 Environment=MAX_PLAYERS=12
+# 前面有 Caddy / nginx 反代时才打开：否则 X-Forwarded-For 谁都能伪造
+# Environment=TRUST_PROXY=1
 ExecStart=/usr/bin/node server/index.mjs
 Restart=always
 RestartSec=2

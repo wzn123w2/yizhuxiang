@@ -20,11 +20,15 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8787 \
-    MAX_PLAYERS=12
+    MAX_PLAYERS=12 \
+    DATA_DIR=/app/data
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY --from=build /app/dist ./dist
+# 签筒记录落在 /app/data（容器里要可写；想持久化就挂个 volume）
+RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME ["/app/data"]
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" || exit 1
