@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 山寺 · 服务器一键部署脚本（Ubuntu 22.04 / 24.04，Debian 12 亦可）
+# 且坐 · 服务器一键部署脚本（Ubuntu 22.04 / 24.04，Debian 12 亦可）
 #
 #   sudo bash deploy/bootstrap.sh
 #
@@ -123,7 +123,7 @@ ok "签筒数据目录：$APP_DIR/data"
 log "5/7 安装并启动 systemd 服务"
 cat > "/etc/systemd/system/$SERVICE.service" <<UNIT
 [Unit]
-Description=ShanSi (一炷香 · 山寺里坐一会儿)
+Description=Qiezuo (且坐 · 一炷香的时间)
 After=network-online.target
 Wants=network-online.target
 

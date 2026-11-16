@@ -661,13 +661,13 @@ function showUpdateNotice() {
   renderNotice(
     entries,
     entries.length > 1 ? '这几版都更新了什么' : '这次更新了什么',
-    '山寺 · 更新',
+    '且坐 · 更新',
   );
 }
 
 /** 设置里的「更新公告」：回顾最近几次 */
 function openChangelog() {
-  renderNotice(CHANGELOG.slice(0, 5), '更新公告', '山寺 · 最近几次更新');
+  renderNotice(CHANGELOG.slice(0, 5), '更新公告', '且坐 · 最近几次更新');
 }
 
 // ————————————————————————————— 求签
@@ -1410,7 +1410,7 @@ function initNet() {
         if (!linkToastShown) {
           linkToastShown = true;
           if (players.length) toast(`法堂里已有 ${players.length} 位同修`);
-          else toast('已与山寺连线 · 可邀人同来');
+          else toast('已与且坐连线 · 可邀人同来');
         }
       },
       onJoin(p) {

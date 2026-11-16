@@ -19,6 +19,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16.5',
+    date: '2026-11-16',
+    title: '改了个名字',
+    items: [
+      '「山寺」改叫「且坐」——进来不是参观，是且坐一会儿。',
+      '副题「一炷香的时间」：一支香烧完，就是坐的这一会儿。',
+      '存档、称呼、木鱼和念珠的累计数都不受影响。',
+    ],
+  },
+  {
     id: '2026-11-16.4',
     date: '2026-11-16',
     title: '写信找我',

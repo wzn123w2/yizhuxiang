@@ -1,4 +1,4 @@
-# 山寺 · systemd 服务模板
+# 且坐 · systemd 服务模板
 #
 #   sudo cp deploy/shanshi.service /etc/systemd/system/shanshi.service
 #   sudo systemctl daemon-reload
@@ -10,7 +10,7 @@
 # 如果 node 是 nvm 装的，一般不用 systemd 跑，改用 pm2 更方便）。
 
 [Unit]
-Description=ShanSi (一炷香 · 山寺里坐一会儿)
+Description=Qiezuo (且坐 · 一炷香的时间)
 Documentation=https://example.com
 After=network-online.target
 Wants=network-online.target
