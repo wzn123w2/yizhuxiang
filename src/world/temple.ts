@@ -61,6 +61,8 @@ export interface Temple {
   woodfishStand: THREE.Object3D;
   /** 签筒：走近点一下就求签 */
   fortuneStand: THREE.Object3D;
+  /** 主尊佛像脚下（xz 用来算“离佛多远”，梵呗据此变响） */
+  buddhaPos: THREE.Vector3;
   walkRects: WalkRect[];
   obstacles: Obstacle[];
   /** 会挡住镜头的建筑构件（相机碰撞用） */
@@ -362,6 +364,19 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const obstacles: Obstacle[] = [];
   const occluders: THREE.Object3D[] = [];
   const waterMeshes: THREE.MeshStandardMaterial[] = [];
+
+  /** 池里的鱼：绕浅椭圆慢慢游，只露一点背 */
+  interface PondFish {
+    g: THREE.Group;
+    tail: THREE.Object3D;
+    rx: number;
+    rz: number;
+    w: number;
+    phase: number;
+    y: number;
+    bob: number;
+  }
+  const fishes: PondFish[] = [];
 
   // ————————————— 地面：殿内
 
@@ -1719,6 +1734,76 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     }
 
     obstacles.push({ x: pondX, z: pondZ, r: 3.9 });
+
+    // ——— 池鱼：贴着水面游的小影子。
+    // 池底只有一张色板、水面在它上面 2cm，所以鱼做成扁的，
+    // 只让背脊露出水面一点点——不盯着看就只是几道水纹。
+    const waterY = YARD_Y + 0.03;
+    const fishMats = [
+      new THREE.MeshStandardMaterial({ color: 0x3c4032, roughness: 0.5, side: THREE.DoubleSide }),
+      new THREE.MeshStandardMaterial({ color: 0x2f3a31, roughness: 0.55, side: THREE.DoubleSide }),
+      new THREE.MeshStandardMaterial({ color: 0x8a5a2c, roughness: 0.48, side: THREE.DoubleSide }),
+    ];
+
+    const makeFish = (
+      len: number,
+      mat: THREE.Material,
+      rx: number,
+      w: number,
+      phase: number,
+      deep = 0,
+    ): PondFish => {
+      const g = new THREE.Group();
+
+      const body = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat);
+      body.scale.set(len * 0.17, len * 0.13, len * 0.5);
+      g.add(body);
+
+      // 尾鳍：竖着的一片三角，游起来左右摆
+      const tail = new THREE.Group();
+      tail.position.z = -len * 0.44;
+      const tailGeo = new THREE.BufferGeometry();
+      tailGeo.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(
+          [0, 0, 0, 0, len * 0.1, -len * 0.3, 0, -len * 0.1, -len * 0.3],
+          3,
+        ),
+      );
+      tailGeo.computeVertexNormals();
+      tail.add(new THREE.Mesh(tailGeo, mat));
+      g.add(tail);
+
+      // 背鳍：从上面看不清，侧面能看出是鱼
+      const finGeo = new THREE.BufferGeometry();
+      finGeo.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(
+          [0, 0, len * 0.06, 0, len * 0.09, -len * 0.1, 0, 0, -len * 0.22],
+          3,
+        ),
+      );
+      finGeo.computeVertexNormals();
+      const fin = new THREE.Mesh(finGeo, mat);
+      fin.position.y = len * 0.11;
+      g.add(fin);
+
+      group.add(g);
+      return {
+        g,
+        tail,
+        rx,
+        rz: rx * 0.72,
+        w,
+        phase,
+        y: waterY - 0.018 - deep,
+        bob: 0.004,
+      };
+    };
+
+    fishes.push(makeFish(0.3, fishMats[0], 2.15, 0.1, 0.4));
+    fishes.push(makeFish(0.26, fishMats[1], 1.5, -0.13, 2.7, 0.008));
+    fishes.push(makeFish(0.34, fishMats[2], 2.6, 0.075, 4.5, 0.004));
   }
 
   // 松树
@@ -2432,6 +2517,23 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       m.opacity = 0.9 + Math.sin(t * 0.9) * 0.04;
     }
 
+    // 池鱼：绕浅椭圆慢慢游，偶尔摆一下尾
+    for (const f of fishes) {
+      const a = t * f.w + f.phase;
+      const wob = 1 + Math.sin(a * 0.63 + 1.7) * 0.1;
+      const x = pondX + Math.cos(a) * f.rx * wob;
+      const z = pondZ + Math.sin(a) * f.rz * wob;
+      const a2 = a + 0.05;
+      const wob2 = 1 + Math.sin(a2 * 0.63 + 1.7) * 0.1;
+      const dx = pondX + Math.cos(a2) * f.rx * wob2 - x;
+      const dz = pondZ + Math.sin(a2) * f.rz * wob2 - z;
+
+      f.g.position.set(x, f.y + Math.sin(t * 0.31 + f.phase) * f.bob, z);
+      f.g.rotation.y = Math.atan2(dx, dz);
+      f.g.rotation.z = Math.sin(t * 0.7 + f.phase) * 0.06;
+      f.tail.rotation.y = Math.sin(t * 3.6 + f.phase * 3) * 0.45;
+    }
+
     const now = performance.now();
     for (let i = sticks.length - 1; i >= 0; i--) {
       const s = sticks[i];
@@ -2494,6 +2596,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     burner,
     woodfishStand,
     fortuneStand,
+    buddhaPos: new THREE.Vector3(0, 0, altarZ),
     occluders,
     ceilY: CEIL,
     walkRects: [

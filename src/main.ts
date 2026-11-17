@@ -3,6 +3,7 @@ import * as THREE from 'three';
 
 import { buildTemple, type Temple, type Cushion } from './world/temple';
 import { Monk, type Pose } from './world/monk';
+import { Novice } from './world/novice';
 import { Controls } from './game/controls';
 import { AudioHost, isIOSLike } from './audio/engine';
 import { Sounds, Wind, Chant } from './audio/sounds';
@@ -121,6 +122,7 @@ let merit = save.merit;
 let temple: Temple;
 let weatherVfx: WeatherVfx;
 let monk: Monk;
+let novice: Novice;
 
 const controls = new Controls(
   canvas,
@@ -199,19 +201,20 @@ function toast(text: string) {
   (toast as any)._t = window.setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
-function floater(world: THREE.Vector3, text: string) {
+function floater(world: THREE.Vector3, text: string, quote = false) {
   const v = world.clone().project(camera);
   const x = (v.x * 0.5 + 0.5) * window.innerWidth;
   const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
   if (x < -80 || x > window.innerWidth + 80) return;
 
   const el = document.createElement('div');
-  el.className = 'floater';
+  el.className = quote ? 'floater quote' : 'floater';
   el.textContent = text;
   el.style.left = `${x}px`;
   el.style.top = `${y}px`;
   floaters.appendChild(el);
-  window.setTimeout(() => el.remove(), 1300);
+  // 真言要看得完：逗留得比“功德 +1”久一点
+  window.setTimeout(() => el.remove(), quote ? 3800 : 1300);
 }
 
 function pickCushionAt(clientX: number, clientY: number): Cushion | null {
@@ -240,14 +243,16 @@ function pickCushionAt(clientX: number, clientY: number): Cushion | null {
   return best;
 }
 
-/** 悬停：桌面端鼠标经过蒲团时给一点提示 */
+/** 悬停：桌面端鼠标经过蒲团 / 小沙弥时给一点提示 */
 function onHover(clientX: number, clientY: number) {
   const c = sitting || moveTarget ? null : pickCushionAt(clientX, clientY);
-  if (c === hoverCushion) return;
-  if (hoverCushion) hoverCushion.hover = 0;
-  hoverCushion = c;
-  if (c) c.hover = 1;
-  canvas.style.cursor = c ? 'pointer' : '';
+  if (c !== hoverCushion) {
+    if (hoverCushion) hoverCushion.hover = 0;
+    hoverCushion = c;
+    if (c) c.hover = 1;
+  }
+  const overNovice = !!novice && raycaster.intersectObject(novice.root, true).length > 0;
+  canvas.style.cursor = c || overNovice ? 'pointer' : '';
 }
 
 function setActiveCushion(c: Cushion | null) {
@@ -353,6 +358,11 @@ async function boot() {
   monk.root.position.set(0, temple.groundHeightAt(0, startZ), startZ);
   monk.setFacing(Math.PI);
   scene.add(monk.root);
+
+  // 佛前的小沙弥：坐在佛坛最下一级台阶上，偶尔念一句真言
+  novice = new Novice(onNoviceSpeak);
+  novice.placeAt(3.15, -6.6, 0.34);
+  scene.add(novice.root);
 
   // 镜头也跟着一开始就对好，避免开场时"从佛堂外面一路飘过来"
   controls.focus.copy(monk.root.position).add(new THREE.Vector3(0, 1.02, 0));
@@ -522,6 +532,34 @@ async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * 小沙弥“开口”：字浮在他头顶，近处再补一声轻磬。
+ * 音量随距离衰减，和同修的木鱼声一个口径；远了就只剩影子。
+ */
+function onNoviceSpeak(text: string, at: THREE.Vector3) {
+  floater(at, text, true);
+  if (!sounds || !audioOn || save.muted) return;
+  const d = at.distanceTo(monk.root.position);
+  const vol = Math.max(0, 1 - d / 18) ** 1.5;
+  if (vol < 0.06) return;
+  sounds.bell(392, 0.55 * vol);
+}
+
+/**
+ * 梵呗随距离变化：离佛越近越响，到佛前封顶（内部 0.9，不会顶耳朵）。
+ * 5m 以内算“到了佛前”，30m 以外只剩一层底。
+ */
+function updateChantProximity() {
+  if (!chant || !temple || !monk) return;
+  const b = temple.buddhaPos;
+  const p = monk.root.position;
+  const d = Math.hypot(p.x - b.x, p.z - b.z);
+  let t = 1 - (d - 5) / (30 - 5);
+  t = Math.max(0, Math.min(1, t));
+  // smoothstep：远处变化慢、近处更明显，走近时不会一顿一顿地涨
+  chant.setProximity(t * t * (3 - 2 * t));
 }
 
 /**
@@ -1075,7 +1113,13 @@ function onTap(clientX: number, clientY: number) {
     return;
   }
 
-  // 5) 地面（殿内石板 / 庭院草地）
+  // 5) 小沙弥：点他一下，他就念一句
+  if (raycaster.intersectObject(novice.root, true).length) {
+    novice.react();
+    return;
+  }
+
+  // 6) 地面（殿内石板 / 庭院草地）
   const hit = raycaster.intersectObjects(temple.groundMeshes, false)[0];
   if (hit) walkTo(hit.point.clone());
 }
@@ -1146,6 +1190,8 @@ function arrive() {
     pendingSeat = null;
     actionsBar.classList.add('seated');
     toast('已坐 · 可合掌、礼佛、敲木鱼、捻念珠');
+    // 坐下时，佛前的小沙弥招呼一声
+    novice?.react('且坐 · 且坐', 30_000);
     // 跟服务端报备这张蒲团，被占了会被请起来
     mySeat = seatIndexOf(sitting);
     net?.claimSeat(mySeat);
@@ -1208,7 +1254,11 @@ function toggleBow(btn?: HTMLButtonElement) {
   bowing = !bowing;
   const b = btn ?? (actionsBar.querySelector('[data-act="bow"]') as HTMLButtonElement);
   b?.classList.toggle('on', bowing);
-  if (bowing) sounds.chime(0.7);
+  if (bowing) {
+    sounds.chime(0.7);
+    // 小沙弥跟着回一句，但有冷却，免得反复礼佛变成复读
+    novice?.react('阿弥陀佛', 20_000);
+  }
 }
 
 function knock(auto = false) {
@@ -1496,6 +1546,8 @@ function frame(now: number) {
     lastPose = pose;
   }
   monk.update(dt, t);
+  updateChantProximity();
+  novice.update(dt, t, monk.root.position);
 
   // 同修：本机上报名自的位姿，别人的位姿插值到目标
   net?.report(

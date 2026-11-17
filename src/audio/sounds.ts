@@ -300,97 +300,124 @@ export class Wind {
   }
 }
 
-// ————————————————————————————— 唱诵（五声音阶的单声部吟唱 + 殿内混响）
+// ————————————————————————————— 梵呗（大悲咒一路的器乐梵音）
 
 /**
- * 男声唱诵的常用音区，五声音阶 D3–D4。
- * 大悲咒那一路的念白感，靠的就三样：单声部、级进为主、句尾落回主音。
+ * 原来这里用锯齿波 + 三个共振峰拼“人声”，音色卡在合成器和喉音之间，
+ * 听久了会累。现在换成器乐梵呗：
+ *   1. 低音持续 —— 殿里那口气
+ *   2. 五声音阶上的引磬旋律，走固定乐句，不再随机游走
+ *   3. 很长的殿内混响 + 一点回声 —— 余音绕梁
+ * 人声只留一层极轻的正弦“嗡”垫，远听像殿角有几个人在低声应和。
  */
-const CHANT_SCALE = [146.83, 174.61, 196.0, 220.0, 261.63, 293.66];
+const MANTRA_SCALE = [146.83, 174.61, 196.0, 220.0, 261.63, 293.66]; // D3 小调五声
 
-/** 元音共振峰 F1/F2/F3 与相对权重（阿、嗡、诶、乌、姆） */
-const VOWELS: Array<{ f: [number, number, number]; w: [number, number, number]; p: number }> = [
-  { f: [730, 1090, 2440], w: [1, 0.5, 0.22], p: 0.34 }, // 阿
-  { f: [470, 820, 2400], w: [1, 0.45, 0.2], p: 0.26 }, // 嗡
-  { f: [390, 1600, 2500], w: [1, 0.4, 0.18], p: 0.14 }, // 诶
-  { f: [320, 700, 2350], w: [1, 0.35, 0.15], p: 0.1 }, // 乌
-  { f: [250, 1150, 2300], w: [1, 0.25, 0.12], p: 0.16 }, // 姆
+/** 乐句写成音级（-1 = 空一拍）：句尾都落回主音，听起来才像一支曲子 */
+const MANTRA_PHRASES: number[][] = [
+  [4, 3, 2, -1, 3, 2, 1, 0],
+  [0, 2, 3, 4, -1, 3, 1, 0],
+  [2, 3, 4, 5, 4, 3, 2, -1, 0],
+  [4, 5, 4, 3, 2, -1, 1, 0],
 ];
-
-function pickVowel() {
-  let r = Math.random();
-  for (const v of VOWELS) {
-    r -= v.p;
-    if (r <= 0) return v;
-  }
-  return VOWELS[0];
-}
 
 export class Chant {
   private out: GainNode | null = null;
+  private prox: GainNode | null = null;
   private conv: ConvolverNode | null = null;
+  private echoIn: AudioNode | null = null;
   private version = -1;
   private scheduler = 0;
   private bellTimer = 0;
   private nextAt = 0;
-  private phraseLeft = 0;
-  private degree = 2;
-  private prevFreq = CHANT_SCALE[2];
+  private phrase = 0;
+  private cursor = 0;
   private wanted = false;
+  /** 0 = 远处，1 = 佛前 */
+  private proxTarget = 0.3;
+  private proxSent = -1;
 
   constructor(private host: AudioHost) {
     host.onRebuild(() => {
       this.out = null;
+      this.prox = null;
       this.conv = null;
+      this.echoIn = null;
       this.version = -1;
       if (this.wanted) this.start();
     });
   }
 
+  private get ctx() {
+    return this.host.ctx;
+  }
+
   start(): void {
     this.wanted = true;
-    const ctx = this.host.ctx;
+    const ctx = this.ctx;
     if (ctx.state !== 'running') return;
     if (this.out && this.version === this.host.version) return;
 
     const out = ctx.createGain();
-    out.gain.value = 0;
-    // 音符叠起来时别顶到 0dB：一个温和的压缩当限幅
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -18;
-    comp.knee.value = 8;
-    comp.ratio.value = 3.5;
-    comp.attack.value = 0.012;
-    comp.release.value = 0.35;
-    out.connect(comp).connect(this.host.chantBus);
-    out.gain.setTargetAtTime(0.5, ctx.currentTime, 3.0);
+    out.gain.value = 0.0001;
 
-    // 殿内混响：一段指数衰减的噪声当脉冲响应，唱诵才不会贴在耳朵上
+    // 输出前先过一道轻限幅：音符再密也不会突然顶响（最大值有天花板）
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -14;
+    limiter.knee.value = 5;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.004;
+    limiter.release.value = 0.28;
+
+    // 离佛越近越响；近处封顶，不把耳朵顶住
+    const prox = ctx.createGain();
+    prox.gain.value = this.proxGain(this.proxTarget);
+
+    out.connect(limiter).connect(prox).connect(this.host.chantBus);
+    out.gain.setTargetAtTime(0.5, ctx.currentTime, 2.8);
+
+    // 殿内混响（6.5s）+ 一路轻回声：尾音拖得长，才有余音绕梁
     const conv = ctx.createConvolver();
-    conv.buffer = this.makeIR(ctx, 3.6, 2.9);
+    conv.buffer = this.makeIR(ctx, 6.5, 2.3);
     const wet = ctx.createGain();
-    wet.gain.value = 0.5;
-    conv.connect(wet).connect(out);
+    wet.gain.value = 0.62;
+    const wetLp = ctx.createBiquadFilter();
+    wetLp.type = 'lowpass';
+    wetLp.frequency.value = 3400;
+    conv.connect(wetLp).connect(wet).connect(out);
 
-    // ——— 低音持续层：只做"有人在殿里"的底，不抢唱诵
+    const echo = ctx.createDelay(1.5);
+    echo.delayTime.value = 0.47;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.32;
+    const echoLp = ctx.createBiquadFilter();
+    echoLp.type = 'lowpass';
+    echoLp.frequency.value = 2400;
+    echo.connect(echoLp).connect(fb).connect(echo);
+    const echoWet = ctx.createGain();
+    echoWet.gain.value = 0.26;
+    echo.connect(echoWet).connect(out);
+    echo.connect(conv); // 回声再落进混响，尾巴更长
+
+    // ——— 低音持续：只做“殿里有人”的底，不抢旋律
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 460;
-    lp.Q.value = 0.5;
+    lp.frequency.value = 420;
+    lp.Q.value = 0.55;
     lp.connect(out);
+    lp.connect(conv);
 
     [73.42, 110.0].forEach((f, i) => {
       const osc = ctx.createOscillator();
       osc.type = 'sine';
-      osc.frequency.value = f * (1 + (Math.random() - 0.5) * 0.004);
+      osc.frequency.value = f * (1 + (Math.random() - 0.5) * 0.003);
       const g = ctx.createGain();
       g.gain.value = 0.11 / (i + 1);
       osc.connect(g).connect(lp);
       osc.start();
 
-      // 两位"法师"的呼吸周期不同
+      // 两位“法师”的呼吸周期不同
       const lfo = ctx.createOscillator();
-      lfo.frequency.value = 0.045 + Math.random() * 0.05;
+      lfo.frequency.value = 0.04 + Math.random() * 0.04;
       const lg = ctx.createGain();
       lg.gain.value = 0.05 / (i + 1);
       lfo.connect(lg).connect(g.gain);
@@ -399,217 +426,208 @@ export class Chant {
 
     // 极慢的滤波扫动，让低音不死板
     const sweep = ctx.createOscillator();
-    sweep.frequency.value = 0.031;
+    sweep.frequency.value = 0.028;
     const sg = ctx.createGain();
-    sg.gain.value = 180;
+    sg.gain.value = 150;
     sweep.connect(sg).connect(lp.frequency);
     sweep.start();
 
-    this.out = out;
-    this.conv = conv;
-    this.version = this.host.version;
+    // ——— 和声垫：D3 / A3 / D4 上几把极轻的正弦，出来像远远的一层“嗡”
+    const padLp = ctx.createBiquadFilter();
+    padLp.type = 'lowpass';
+    padLp.frequency.value = 1100;
+    padLp.Q.value = 0.4;
+    const pad = ctx.createGain();
+    pad.gain.setValueAtTime(0.0001, ctx.currentTime);
+    pad.gain.linearRampToValueAtTime(0.055, ctx.currentTime + 8);
+    padLp.connect(pad);
+    pad.connect(out);
+    pad.connect(conv);
 
-    // ——— 唱诵调度：先排好一小段，别等到点了才发
-    this.degree = 2;
-    this.prevFreq = CHANT_SCALE[this.degree];
-    this.phraseLeft = 0;
-    this.nextAt = ctx.currentTime + 0.6;
+    for (const [f, lvl] of [
+      [146.83, 1],
+      [220, 0.6],
+      [293.66, 0.36],
+    ] as const) {
+      for (const det of [-0.0042, 0.0038]) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = f * (1 + det);
+        const g = ctx.createGain();
+        g.gain.value = 0.26 * lvl;
+        osc.connect(g).connect(padLp);
+        osc.start();
+
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 0.08 + Math.random() * 0.09;
+        const lg = ctx.createGain();
+        lg.gain.value = f * 0.004;
+        lfo.connect(lg).connect(osc.frequency);
+        lfo.start();
+      }
+    }
+
+    this.out = out;
+    this.prox = prox;
+    this.conv = conv;
+    this.echoIn = echo;
+    this.version = this.host.version;
+    this.proxSent = this.proxTarget;
+
+    // ——— 旋律调度：先排好一小段，别等到点了才发
+    this.phrase = Math.floor(Math.random() * MANTRA_PHRASES.length);
+    this.cursor = 0;
+    this.nextAt = ctx.currentTime + 1.2;
     window.clearInterval(this.scheduler);
-    this.scheduler = window.setInterval(() => this.schedule(), 200);
+    this.scheduler = window.setInterval(() => this.schedule(), 250);
 
     window.clearInterval(this.bellTimer);
-    this.bellTimer = window.setInterval(() => this.chime(), 43_000);
+    this.bellTimer = window.setInterval(() => this.bowl(), 47_000);
   }
 
-  /** 200ms 一跳：把未来 0.8 秒内该唱的字排进音频时间轴 */
+  /** t: 0 = 远，1 = 佛前。变化大于 0.6% 才排参数，免得每帧堆事件 */
+  setProximity(t: number): void {
+    const v = Math.max(0, Math.min(1, t));
+    this.proxTarget = v;
+    if (!this.prox || this.proxSent < 0) {
+      this.proxSent = v;
+      return;
+    }
+    if (Math.abs(v - this.proxSent) < 0.006) return;
+    this.proxSent = v;
+    const ctx = this.ctx;
+    if (ctx.state === 'closed') return;
+    this.prox.gain.setTargetAtTime(this.proxGain(v), ctx.currentTime, 1.1);
+  }
+
+  private proxGain(t: number): number {
+    // 远处只剩一层底（0.3），佛前到 0.9 封顶：够近、但不会顶耳朵
+    return 0.3 + 0.6 * t;
+  }
+
+  /** 250ms 一跳：把未来 1.2 秒内该响的音排进音频时间轴 */
   private schedule(): void {
-    const ctx = this.host.ctx;
+    const ctx = this.ctx;
     if (ctx.state !== 'running' || !this.out) return;
 
     // 切后台回来时时间轴会跳很远，重新起句
     if (this.nextAt < ctx.currentTime - 1.5) {
-      this.nextAt = ctx.currentTime + 0.4;
-      this.phraseLeft = 0;
+      this.nextAt = ctx.currentTime + 0.6;
+      this.cursor = 0;
     }
 
-    while (this.nextAt < ctx.currentTime + 0.8) {
-      if (this.phraseLeft <= 0) {
-        // 换气：一句唱完了，停 1.4~2.6 秒
-        this.nextAt += rand(1.4, 2.6);
-        this.phraseLeft = 7 + Math.floor(Math.random() * 6);
+    while (this.nextAt < ctx.currentTime + 1.2) {
+      const phrase = MANTRA_PHRASES[this.phrase];
+      if (this.cursor >= phrase.length) {
+        // 句末：留一段呼吸，下一句换个乐句
+        if (Math.random() < 0.7) this.bowlAt(this.nextAt + 0.1);
+        this.nextAt += rand(2.2, 4.4);
+        this.phrase = (this.phrase + 1) % MANTRA_PHRASES.length;
+        this.cursor = 0;
         continue;
       }
-      this.syllable(this.nextAt);
-      this.nextAt += this.stepDur();
-      this.phraseLeft--;
+      const deg = phrase[this.cursor++];
+      if (deg >= 0) this.pluck(this.nextAt, deg);
+      this.nextAt += this.stepDur(deg < 0);
     }
   }
 
-  /** 一个字的长短：四分音附近，带点人味 */
-  private stepDur(): number {
+  /** 一个音的长短：慢，偶尔拖长、偶尔连着走两个音 */
+  private stepDur(rest: boolean): number {
+    if (rest) return rand(0.9, 1.4);
     const r = Math.random();
-    if (r < 0.1) return 1.05 + rand(0, 0.35); // 偶尔拖长一拍
-    if (r < 0.24) return 0.26 + rand(0, 0.06); // 偶尔连着念快
-    return 0.42 + rand(0, 0.2);
+    if (r < 0.18) return 1.5 + rand(0, 0.7);
+    if (r < 0.32) return 0.62 + rand(0, 0.12);
+    return 1.0 + rand(0, 0.35);
   }
 
-  /** 旋律：以级进为主，句尾落回主音附近，偶尔往上挑一句 */
-  private nextDegree(): number {
-    const last = this.degree;
-    let step = 0;
-    const r = Math.random();
-    if (r < 0.34) step = 0; // 念白：常停在同一个音上
-    else if (r < 0.78) step = Math.random() < 0.5 ? -1 : 1;
-    else if (r < 0.94) step = Math.random() < 0.5 ? -2 : 2;
-    else step = 3;
-
-    let d = last + step;
-    // 往上挑之后要落回来，不然越唱越高
-    if (d > 5) d = 5 - Math.floor(Math.random() * 2);
-    if (d < 0) d = Math.floor(Math.random() * 2);
-
-    // 句尾三字更容易回到主音
-    if (this.phraseLeft <= 3 && Math.random() < 0.6) {
-      d = Math.random() < 0.5 ? 0 : 1;
-    }
-    this.degree = d;
-    return d;
-  }
-
-  /** 唱一个字：锯齿波走共振峰，前面带一点气声当辅音 */
-  private syllable(t0: number): void {
-    const ctx = this.host.ctx;
+  /** 引磬：基音 + 几个泛音，衰减短、尾巴交给混响接住 */
+  private pluck(t0: number, deg: number): void {
+    const ctx = this.ctx;
     const out = this.out;
     if (!out) return;
 
-    const degree = this.nextDegree();
-    const target = CHANT_SCALE[degree] * rand(0.996, 1.004);
-    const dur = this.stepDur() * rand(0.86, 1.0);
-    const v = pickVowel();
-    const from = this.prevFreq;
-    this.prevFreq = target;
+    const f = MANTRA_SCALE[Math.max(0, Math.min(deg, MANTRA_SCALE.length - 1))] * 2;
+    const level = 0.17 * rand(0.86, 1.04);
 
-    const amp = ctx.createGain();
-    amp.gain.value = 0;
-    // 低通一下，剪掉锯齿波的高次谐波，不然像合成器
-    const tone = ctx.createBiquadFilter();
-    tone.type = 'lowpass';
-    tone.frequency.value = 3100;
-    tone.Q.value = 0.55;
-    amp.connect(tone);
-    tone.connect(out);
-    if (this.conv) tone.connect(this.conv);
+    const g = ctx.createGain();
+    g.gain.value = level;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = rand(-0.45, 0.45);
+    g.connect(pan);
+    pan.connect(out);
+    if (this.conv) pan.connect(this.conv);
+    if (this.echoIn) pan.connect(this.echoIn);
 
-    // 音高过渡（滑音）+ 慢颤音
-    const src = ctx.createOscillator();
-    src.type = 'sawtooth';
-    src.frequency.setValueAtTime(from, t0);
-    src.frequency.exponentialRampToValueAtTime(target, t0 + 0.085);
+    const parts: Array<[number, number, number]> = [
+      [1, 0.5, 2.8], // 基音
+      [2.004, 0.16, 1.7], // 八度泛音
+      [3.01, 0.06, 1.0],
+      [4.98, 0.025, 0.6],
+      [0.5, 0.12, 3.8], // 低八度的影子，像殿角有人应和
+    ];
+    for (const [ratio, amp, decay] of parts) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f * ratio, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * ratio * 0.9985, t0 + decay);
+      const eg = ctx.createGain();
+      eg.gain.setValueAtTime(0.0001, t0);
+      eg.gain.linearRampToValueAtTime(amp, t0 + 0.012);
+      eg.gain.exponentialRampToValueAtTime(0.0001, t0 + decay);
+      osc.connect(eg).connect(g);
+      osc.start(t0);
+      osc.stop(t0 + decay + 0.05);
+    }
 
-    // 第二个声部：微微失谐，出来一点"几个人一起念"的合唱感
-    const src2 = ctx.createOscillator();
-    src2.type = 'sawtooth';
-    const f2 = target * 0.9965;
-    src2.frequency.setValueAtTime(from * 0.9965, t0 + 0.012);
-    src2.frequency.exponentialRampToValueAtTime(f2, t0 + 0.095);
-    const g2 = ctx.createGain();
-    g2.gain.value = 0.42;
-    src2.connect(g2);
-
-    const vib = ctx.createOscillator();
-    vib.frequency.value = rand(4.4, 5.6);
-    const vibGain = ctx.createGain();
-    vibGain.gain.setValueAtTime(0, t0);
-    vibGain.gain.linearRampToValueAtTime(target * rand(0.004, 0.009), t0 + 0.35);
-    vib.connect(vibGain).connect(src.frequency);
-    vib.start(t0);
-    vib.stop(t0 + dur + 0.5);
-
-    // 三个共振峰并联，拼出元音
-    v.f.forEach((f, i) => {
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = f;
-      bp.Q.value = 7.5 + i * 2;
-      const g = ctx.createGain();
-      g.gain.value = v.w[i] * 1.05;
-      src.connect(bp).connect(g).connect(amp);
-      g2.connect(bp);
-    });
-
-    // 一点基频本体，避免只听见"嗡嗡"的滤器声
-    const body = ctx.createOscillator();
-    body.type = 'sine';
-    body.frequency.setValueAtTime(from, t0);
-    body.frequency.exponentialRampToValueAtTime(target, t0 + 0.085);
-    const bg = ctx.createGain();
-    bg.gain.value = 0.15;
-    body.connect(bg).connect(amp);
-    body.start(t0);
-    body.stop(t0 + dur + 0.4);
-
-    // 气声辅音
-    const breath = ctx.createBufferSource();
-    breath.buffer = this.host.noiseBuffer;
+    // 一点“气口”，别让钟琴听起来太电子
+    const n = ctx.createBufferSource();
+    n.buffer = this.host.noiseBuffer;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = rand(1400, 2600);
-    bp.Q.value = 1.4;
-    const bgn = ctx.createGain();
-    bgn.gain.setValueAtTime(0.0001, t0);
-    bgn.gain.linearRampToValueAtTime(0.035, t0 + 0.02);
-    bgn.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11);
-    breath.connect(bp).connect(bgn).connect(amp);
-    breath.start(t0, Math.random() * 1.5, 0.14);
-
-    // 包络：起音慢、尾巴留一点给混响
-    amp.gain.setValueAtTime(0.0001, t0);
-    amp.gain.linearRampToValueAtTime(0.38, t0 + 0.075);
-    amp.gain.linearRampToValueAtTime(0.26, t0 + Math.min(0.3, dur * 0.6));
-    amp.gain.setValueAtTime(0.26, t0 + dur);
-    amp.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + 0.26);
-
-    src.start(t0);
-    src.stop(t0 + dur + 0.3);
-    src2.start(t0 + 0.012);
-    src2.stop(t0 + dur + 0.3);
-
-    // 节点用完就丢，别越堆越多
-    src.onended = () => {
-      amp.disconnect();
-      tone.disconnect();
-      body.disconnect();
-      bg.disconnect();
-      breath.disconnect();
-    };
+    bp.frequency.value = 2600;
+    bp.Q.value = 0.9;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.018, t0);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
+    n.connect(bp).connect(ng).connect(g);
+    n.start(t0, Math.random() * 1.5, 0.08);
   }
 
-  /** 唱诵里偶尔出现的一声小磬 */
-  private chime(): void {
-    const ctx = this.host.ctx;
-    if (ctx.state !== 'running' || !this.out) return;
-    const t0 = ctx.currentTime + 0.01;
-    const out = ctx.createGain();
-    out.gain.value = 0.075;
-    out.connect(this.out);
-    if (this.conv) out.connect(this.conv);
+  /** 句末的一声小磬（D4） */
+  private bowlAt(t0: number): void {
+    const ctx = this.ctx;
+    const out = this.out;
+    if (!out) return;
 
-    for (const [ratio, level, decay] of [
-      [1, 0.5, 5.2],
-      [2.76, 0.22, 3.4],
-      [5.4, 0.1, 2.2],
+    const g = ctx.createGain();
+    g.gain.value = 0.055;
+    g.connect(out);
+    if (this.conv) g.connect(this.conv);
+
+    for (const [ratio, amp, decay] of [
+      [1, 0.5, 6.5],
+      [2.76, 0.2, 4.2],
+      [5.4, 0.075, 2.4],
     ] as const) {
       const osc = ctx.createOscillator();
       osc.type = 'sine';
-      osc.frequency.value = 196 * ratio;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.linearRampToValueAtTime(level, t0 + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + decay);
-      osc.connect(g).connect(out);
+      osc.frequency.value = 293.66 * ratio;
+      const eg = ctx.createGain();
+      eg.gain.setValueAtTime(0.0001, t0);
+      eg.gain.linearRampToValueAtTime(amp, t0 + 0.01);
+      eg.gain.exponentialRampToValueAtTime(0.0001, t0 + decay);
+      osc.connect(eg).connect(g);
       osc.start(t0);
       osc.stop(t0 + decay + 0.1);
     }
+  }
+
+  /** 定时的一声磬，打断长时间的重复 */
+  private bowl(): void {
+    const ctx = this.ctx;
+    if (ctx.state !== 'running' || !this.out) return;
+    this.bowlAt(ctx.currentTime + 0.05);
   }
 
   /** 生成一段衰减噪声当混响脉冲响应 */
@@ -632,12 +650,14 @@ export class Chant {
     this.wanted = false;
     window.clearInterval(this.scheduler);
     window.clearInterval(this.bellTimer);
-    const ctx = this.host.ctx;
+    const ctx = this.ctx;
     if (this.out && ctx.state !== 'closed') {
       this.out.gain.setTargetAtTime(0, ctx.currentTime, 0.8);
     }
     this.out = null;
+    this.prox = null;
     this.conv = null;
+    this.echoIn = null;
     this.version = -1;
   }
 }

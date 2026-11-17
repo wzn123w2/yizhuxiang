@@ -1090,6 +1090,34 @@ h1 {
   }
 }
 
+/* 小沙弥念的真言：比“功德 +1”大一点、留得久一点 */
+.floater.quote {
+  font-size: 15px;
+  letter-spacing: 0.16em;
+  color: #f3d9a4;
+  text-shadow: 0 0 18px rgba(232, 180, 106, 0.95), 0 0 40px rgba(232, 180, 106, 0.4);
+  animation: quoteFloat 3.7s ease-out forwards;
+}
+
+@keyframes quoteFloat {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 4px) scale(0.9);
+  }
+  10% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  74% {
+    opacity: 1;
+    transform: translate(-50%, -22px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -38px) scale(1.02);
+  }
+}
+
 /* ============ Toast ============ */
 
 #toast {
