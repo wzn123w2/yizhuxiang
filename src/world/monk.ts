@@ -4,6 +4,12 @@ export type Pose = 'idle' | 'walk' | 'sit' | 'bow' | 'anjali' | 'bead' | 'incens
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
+/** 小沙弥可选的衣着：默认为便服（褐衣），披上袈裟后一眼能看出是僧人 */
+export interface MonkOptions {
+  /** 深红袈裟搭在左肩，配金边与肩扣 */
+  kasaya?: boolean;
+}
+
 /**
  * 小沙弥：全部由基本几何体拼出来，不依赖模型文件。
  * 动画是"目标值 + 插值"：每个姿态给一组目标角度，每帧向目标靠拢，
@@ -26,10 +32,13 @@ export class Monk {
   // 目标值
   private tgt = { bodyY: 0, tiltX: 0, headX: 0, armLX: 0, armLZ: 0, armRX: 0, armRZ: 0, squash: 1 };
 
-  constructor(robeColor = 0x6b4a35) {
+  constructor(robeColor = 0x6b4a35, opts: MonkOptions = {}) {
     const skin = new THREE.MeshStandardMaterial({ color: 0xe4c5a2, roughness: 0.72 });
     const robe = new THREE.MeshStandardMaterial({ color: robeColor, roughness: 0.88 });
-    const robeDark = new THREE.MeshStandardMaterial({ color: 0x4a3325, roughness: 0.9 });
+    const robeDark = new THREE.MeshStandardMaterial({
+      color: opts.kasaya ? 0x6f3729 : 0x4a3325,
+      roughness: 0.9,
+    });
     const bead = new THREE.MeshStandardMaterial({ color: 0x2e2419, roughness: 0.55 });
 
     this.root.add(this.body);
@@ -41,6 +50,39 @@ export class Monk {
     torso.castShadow = true;
     this.body.add(torso);
     this.robeMesh = torso;
+
+    // 袈裟：罩在里衣外面，只留右肩一个口子；金边斜过胸前
+    if (opts.kasaya) {
+      const kasayaMat = new THREE.MeshStandardMaterial({ color: 0x943e2b, roughness: 0.8 });
+      const trimMat = new THREE.MeshStandardMaterial({
+        color: 0xc9a457,
+        roughness: 0.45,
+        metalness: 0.3,
+      });
+
+      // 外袍：比里衣略大的球壳，缺一个口，露出右肩
+      const drape = new THREE.Mesh(
+        new THREE.SphereGeometry(0.416, 22, 16, Math.PI * 0.33, Math.PI * 1.44, 0.14, 1.86),
+        kasayaMat,
+      );
+      drape.rotation.y = -0.55;
+      drape.castShadow = true;
+      torso.add(drape);
+
+      // 金边：一道斜绕胸口的细带
+      const sash = new THREE.Group();
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.43, 0.017, 6, 40), trimMat);
+      band.rotation.x = Math.PI / 2;
+      sash.add(band);
+      sash.rotation.set(0.32, 0, 0.58);
+      torso.add(sash);
+
+      // 左肩上的搭扣
+      const clasp = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.013, 6, 16), trimMat);
+      clasp.position.set(-0.27, 0.24, 0.2);
+      clasp.rotation.set(0.5, -0.5, 0.9);
+      torso.add(clasp);
+    }
 
     // 下摆
     const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.46, 0.22, 18), robeDark);
@@ -54,10 +96,13 @@ export class Monk {
     collar.position.y = 0.72;
     this.body.add(collar);
 
-    // 挂在脖子上的念珠
-    const mala = new THREE.Mesh(new THREE.TorusGeometry(0.235, 0.026, 6, 20), bead);
+    // 挂在脖子上的念珠：披了袈裟就把珠子挪到袍子外面，不然会被盖住
+    const mala = new THREE.Mesh(
+      new THREE.TorusGeometry(opts.kasaya ? 0.25 : 0.235, 0.026, 6, 20),
+      bead,
+    );
     mala.rotation.x = Math.PI / 2.35;
-    mala.position.set(0, 0.63, 0.04);
+    mala.position.set(0, opts.kasaya ? 0.6 : 0.63, opts.kasaya ? 0.13 : 0.04);
     this.body.add(mala);
 
     // 头

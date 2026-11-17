@@ -19,6 +19,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-17.4',
+    date: '2026-11-17',
+    title: '小沙弥换上了袈裟',
+    items: [
+      '佛前的小沙弥从台阶上挪到了佛坛前的蒲团上，身体不再被台阶挡住。',
+      '换了一件深红袈裟：金边斜过胸前，肩上有一枚金搭扣，一眼能认出是沙弥。',
+    ],
+  },
+  {
     id: '2026-11-17.3',
     date: '2026-11-17',
     title: '池子里有了鱼',

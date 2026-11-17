@@ -36,11 +36,12 @@ export class Novice {
    * @param onSpeak 念一句时回调：main 负责把字浮到头顶、按距离补一声磬
    */
   constructor(private onSpeak: (text: string, at: THREE.Vector3) => void) {
-    this.monk = new Monk(0x7a5636);
+    // 里衣用浅褐，外面披一件深红袈裟：小小一个人也能一眼看出是沙弥
+    this.monk = new Monk(0xb98a55, { kasaya: true });
     this.monk.root.scale.setScalar(0.84);
     // 捻珠的姿态：低头、手在身前，比直挺挺坐着更像在念
     this.monk.setPose('bead');
-    this.monk.setFacing(-0.4);
+    this.monk.setFacing(-0.5);
     this.monk.root.position.y = 0.22;
     this.root.add(this.monk.root);
 

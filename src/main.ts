@@ -359,10 +359,12 @@ async function boot() {
   monk.setFacing(Math.PI);
   scene.add(monk.root);
 
-  // 佛前的小沙弥：坐在佛坛最下一级台阶上，偶尔念一句真言
+  // 佛前的小沙弥：坐在佛坛前的蒲团上，偶尔念一句真言
   novice = new Novice(onNoviceSpeak);
-  novice.placeAt(3.15, -6.6, 0.34);
+  novice.placeAt(4.8, -5.25, 0);
   scene.add(novice.root);
+  // 别让玩家从他身上穿过去
+  temple.obstacles.push({ x: 4.8, z: -5.25, r: 0.8 });
 
   // 镜头也跟着一开始就对好，避免开场时"从佛堂外面一路飘过来"
   controls.focus.copy(monk.root.position).add(new THREE.Vector3(0, 1.02, 0));
