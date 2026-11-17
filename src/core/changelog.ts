@@ -19,6 +19,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-17.5',
+    date: '2026-11-17',
+    title: '梵呗收了一点混响',
+    items: [
+      '殿内的混响收短、收轻了：6.5 秒的长尾换成 4.2 秒，湿声也压低了一截。',
+      '混响尾音不再带低频，低音持续层也调轻了，长时间听不会再“嗡嗡”地压耳朵。',
+    ],
+  },
+  {
     id: '2026-11-17.4',
     date: '2026-11-17',
     title: '小沙弥换上了袈裟',

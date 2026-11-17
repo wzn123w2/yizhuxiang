@@ -307,7 +307,7 @@ export class Wind {
  * 听久了会累。现在换成器乐梵呗：
  *   1. 低音持续 —— 殿里那口气
  *   2. 五声音阶上的引磬旋律，走固定乐句，不再随机游走
- *   3. 很长的殿内混响 + 一点回声 —— 余音绕梁
+ *   3. 一点殿内混响 + 回声 —— 有尾音，但不糊耳朵
  * 人声只留一层极轻的正弦“嗡”垫，远听像殿角有几个人在低声应和。
  */
 const MANTRA_SCALE = [146.83, 174.61, 196.0, 220.0, 261.63, 293.66]; // D3 小调五声
@@ -373,28 +373,33 @@ export class Chant {
     prox.gain.value = this.proxGain(this.proxTarget);
 
     out.connect(limiter).connect(prox).connect(this.host.chantBus);
-    out.gain.setTargetAtTime(0.5, ctx.currentTime, 2.8);
+    out.gain.setTargetAtTime(0.46, ctx.currentTime, 2.8);
 
-    // 殿内混响（6.5s）+ 一路轻回声：尾音拖得长，才有余音绕梁
+    // 殿内混响 + 一路轻回声。混响湿声收着一点，并在卷积之后把低频切掉——
+    // 低频长尾最容在耳朵里“嗡嗡”地堆起来。
     const conv = ctx.createConvolver();
-    conv.buffer = this.makeIR(ctx, 6.5, 2.3);
-    const wet = ctx.createGain();
-    wet.gain.value = 0.62;
+    conv.buffer = this.makeIR(ctx, 4.2, 2.6);
+    const wetHp = ctx.createBiquadFilter();
+    wetHp.type = 'highpass';
+    wetHp.frequency.value = 200;
+    wetHp.Q.value = 0.6;
     const wetLp = ctx.createBiquadFilter();
     wetLp.type = 'lowpass';
-    wetLp.frequency.value = 3400;
-    conv.connect(wetLp).connect(wet).connect(out);
+    wetLp.frequency.value = 3000;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.32;
+    conv.connect(wetHp).connect(wetLp).connect(wet).connect(out);
 
     const echo = ctx.createDelay(1.5);
     echo.delayTime.value = 0.47;
     const fb = ctx.createGain();
-    fb.gain.value = 0.32;
+    fb.gain.value = 0.22;
     const echoLp = ctx.createBiquadFilter();
     echoLp.type = 'lowpass';
-    echoLp.frequency.value = 2400;
+    echoLp.frequency.value = 2200;
     echo.connect(echoLp).connect(fb).connect(echo);
     const echoWet = ctx.createGain();
-    echoWet.gain.value = 0.26;
+    echoWet.gain.value = 0.16;
     echo.connect(echoWet).connect(out);
     echo.connect(conv); // 回声再落进混响，尾巴更长
 
@@ -411,7 +416,7 @@ export class Chant {
       osc.type = 'sine';
       osc.frequency.value = f * (1 + (Math.random() - 0.5) * 0.003);
       const g = ctx.createGain();
-      g.gain.value = 0.11 / (i + 1);
+      g.gain.value = 0.055 / (i + 1);
       osc.connect(g).connect(lp);
       osc.start();
 
@@ -419,7 +424,7 @@ export class Chant {
       const lfo = ctx.createOscillator();
       lfo.frequency.value = 0.04 + Math.random() * 0.04;
       const lg = ctx.createGain();
-      lg.gain.value = 0.05 / (i + 1);
+      lg.gain.value = 0.03 / (i + 1);
       lfo.connect(lg).connect(g.gain);
       lfo.start();
     });
@@ -439,7 +444,7 @@ export class Chant {
     padLp.Q.value = 0.4;
     const pad = ctx.createGain();
     pad.gain.setValueAtTime(0.0001, ctx.currentTime);
-    pad.gain.linearRampToValueAtTime(0.055, ctx.currentTime + 8);
+    pad.gain.linearRampToValueAtTime(0.038, ctx.currentTime + 8);
     padLp.connect(pad);
     pad.connect(out);
     pad.connect(conv);
@@ -548,7 +553,7 @@ export class Chant {
     if (!out) return;
 
     const f = MANTRA_SCALE[Math.max(0, Math.min(deg, MANTRA_SCALE.length - 1))] * 2;
-    const level = 0.17 * rand(0.86, 1.04);
+    const level = 0.19 * rand(0.86, 1.04);
 
     const g = ctx.createGain();
     g.gain.value = level;
