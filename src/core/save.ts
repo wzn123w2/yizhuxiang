@@ -5,7 +5,9 @@ export interface Save {
   merit: number;
   beads: number;
   muted: boolean;
-  vol: { amb: number; chant: number; sfx: number };
+  vol: { amb: number; chant: number; sfx: number; music: number };
+  /** 佛乐（实录梵呗）是否循环播放；关掉就只剩合成的环境音 */
+  music: boolean;
   /** 同修里显示的名字，留空则服务端叫“无名” */
   name: string;
   /** 是否亲手定过称呼：定过就尊重“无名”，没定过则首次自动给个法号 */
@@ -24,7 +26,7 @@ const KEY = 'shanshi.save.v1';
 /** 当前三档音量的默认平衡。改这个数字，老用户下次进来一次性重算 */
 export const VOL_BALANCE = 2;
 
-export const DEFAULT_VOL = { amb: 0.32, chant: 0.62, sfx: 0.7 };
+export const DEFAULT_VOL = { amb: 0.32, chant: 0.62, sfx: 0.7, music: 0.55 };
 
 function empty(): Save {
   return {
@@ -33,6 +35,7 @@ function empty(): Save {
     beads: 0,
     muted: true, // 首次访问默认静音
     vol: { ...DEFAULT_VOL },
+    music: true,
     name: '',
     nameTouched: false,
     volV: VOL_BALANCE,

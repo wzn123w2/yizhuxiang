@@ -7,6 +7,7 @@ import { Novice } from './world/novice';
 import { Controls } from './game/controls';
 import { AudioHost, isIOSLike } from './audio/engine';
 import { Sounds, Wind, Chant } from './audio/sounds';
+import { Music } from './audio/music';
 import { BeadsUI } from './ui/beads';
 import { WeatherVfx } from './world/weather';
 import { fetchWeather, WEATHER_ZH, type WeatherKind } from './core/weather';
@@ -50,6 +51,8 @@ const btnService = $<HTMLButtonElement>('btn-service');
 const btnSettings = $<HTMLButtonElement>('btn-settings');
 const settingsEl = $('settings');
 const audioStateEl = $('audio-state');
+const musicNowEl = $('music-now');
+const musicOnEl = $<HTMLInputElement>('music-on');
 const btnFortune = $<HTMLButtonElement>('btn-fortune');
 const fortuneEl = $('fortune');
 const fortuneAlmanacEl = $('fortune-almanac');
@@ -141,6 +144,7 @@ let host: AudioHost;
 let sounds: Sounds;
 let wind: Wind;
 let chant: Chant;
+let music: Music;
 let audioOn = false;
 let beadsUI: BeadsUI;
 
@@ -394,6 +398,7 @@ async function boot() {
   sounds = new Sounds(host);
   wind = new Wind(host);
   chant = new Chant(host);
+  music = new Music({ log, onChange: () => reflectMusic() });
 
   loadBar.style.width = '92%';
   loadTip.textContent = '正在点一炷香…';
@@ -475,10 +480,15 @@ function applySavedAudioState() {
   // 让 AudioHost 也记住静音：重建上下文 / 切后台回来都不会把静音丢掉
   host.setAllMuted(save.muted);
 
+  // 佛乐只是先把偏好灌进去：首屏还没开门，不在这里 play()
+  music.configure({ on: save.music, muted: save.muted, volume: save.vol.music });
+
   (($('vol-amb') as HTMLInputElement).value = String(Math.round(save.vol.amb * 100)));
   (($('vol-chant') as HTMLInputElement).value = String(Math.round(save.vol.chant * 100)));
+  (($('vol-music') as HTMLInputElement).value = String(Math.round(save.vol.music * 100)));
   (($('vol-sfx') as HTMLInputElement).value = String(Math.round(save.vol.sfx * 100)));
 
+  reflectMusic();
   syncSoundButton();
 
   const note = $('storage-note');
@@ -496,8 +506,39 @@ async function enableAudio() {
   audioOn = true;
   wind.start();
   chant.start();
+  music.start();
   host.setAllMuted(save.muted);
   if (audioStateEl) audioStateEl.textContent = describeAudio();
+  return true;
+}
+
+/** 设置面板里的佛乐一行：勾选状态 + 当前曲目 */
+function reflectMusic() {
+  if (!music) return;
+  if (musicOnEl) musicOnEl.checked = music.enabled;
+  if (!musicNowEl) return;
+  const t = music.track;
+  if (!music.enabled) musicNowEl.textContent = `佛乐已关 · 上一首：${t.title}`;
+  else if (music.playing) musicNowEl.textContent = `正在播放：${t.title} · ${t.who}`;
+  else musicNowEl.textContent = `已暂停：${t.title} · ${t.who}`;
+}
+
+/**
+ * 用户动了任何一个声音开关，就默认他/她想听：
+ * 首次访问是静音存档，不顺手打开的话会以为“点了没反应”。
+ */
+async function wakeSound(): Promise<boolean> {
+  if (!audioOn) {
+    const ok = await enableAudio();
+    if (!ok) return false;
+  }
+  if (save.muted && (await reviveAudio())) {
+    save.muted = false;
+    host.setAllMuted(false);
+    music.setMuted(false);
+    store.persist(save);
+    syncSoundButton();
+  }
   return true;
 }
 
@@ -562,6 +603,8 @@ function updateChantProximity() {
   t = Math.max(0, Math.min(1, t));
   // smoothstep：远处变化慢、近处更明显，走近时不会一顿一顿地涨
   chant.setProximity(t * t * (3 - 2 * t));
+  // 佛乐在放时，合成的梵呗整条让位：两套调子一起走会打架
+  chant.setDuck(music && music.playing ? 0 : 1);
 }
 
 /**
@@ -574,6 +617,7 @@ async function reviveAudio(): Promise<boolean> {
   audioOn = true;
   wind.start();
   chant.start();
+  music.resume();
   host.setAllMuted(save.muted);
   if (audioStateEl) audioStateEl.textContent = describeAudio();
   return true;
@@ -625,6 +669,7 @@ async function audioSelfTest() {
     // 自检也顺手把声音打开：用户点这个按钮，本来就是为了听见
     save.muted = false;
     host.setAllMuted(false);
+    music.setMuted(false);
     store.persist(save);
     syncSoundButton();
   }
@@ -641,18 +686,20 @@ async function toggleSound() {
     if (!ok) return;
     save.muted = false;
     host.setAllMuted(false);
+    music.setMuted(false);
     store.persist(save);
     syncSoundButton();
     toast('声音已开启');
     return;
   }
   if (save.muted && !(await reviveAudio())) {
-    // 想开声但上下文叫不醒：别把按钮切成"静音"，免得看着像好了其实没声
+    // 想开声但上下文叫不醒：别把按钮切成“静音”，免得看着像好了其实没声
     toast('这台设备暂时无法开启声音');
     return;
   }
   save.muted = !save.muted;
   host.setAllMuted(save.muted);
+  music.setMuted(save.muted);
   store.persist(save);
   syncSoundButton();
   toast(save.muted ? '已静音' : '声音已开启');
@@ -931,6 +978,7 @@ function bindUI() {
         // 拖了滑块说明想听
         save.muted = false;
         host.setAllMuted(false);
+        music.setMuted(false);
         syncSoundButton();
         void reviveAudio();
       }
@@ -940,6 +988,43 @@ function bindUI() {
   bindVol('vol-amb', 'amb');
   bindVol('vol-chant', 'chant');
   bindVol('vol-sfx', 'sfx');
+
+  // ——— 佛乐：音量、开关、下一首
+  const musicVol = $<HTMLInputElement>('vol-music');
+  musicVol.addEventListener('input', () => {
+    save.vol.music = Number(musicVol.value) / 100;
+    music.setVolume(save.vol.music);
+    if (save.muted && save.vol.music > 0) {
+      save.muted = false;
+      host.setAllMuted(false);
+      music.setMuted(false);
+      syncSoundButton();
+      void reviveAudio();
+    }
+    store.persist(save);
+  });
+
+  musicOnEl.addEventListener('change', () => {
+    save.music = musicOnEl.checked;
+    music.setOn(save.music);
+    store.persist(save);
+    // 开了却听不见没道理：首次进站是静音存档，顺手把声音也打开
+    if (save.music) void wakeSound();
+    reflectMusic();
+  });
+
+  $('btn-music-next').addEventListener('click', () => {
+    if (!music.enabled) {
+      // 没开佛乐时点「下一首」，意思就是“我要听”
+      save.music = true;
+      music.setOn(true);
+      store.persist(save);
+      void wakeSound();
+      return;
+    }
+    void wakeSound();
+    music.next();
+  });
 
   $('btn-reset').addEventListener('click', () => {
     merit = 0;
@@ -975,17 +1060,23 @@ function bindUI() {
   });
 
   document.addEventListener('visibilitychange', async () => {
-    if (document.hidden) return;
+    // 切后台就把佛乐停住：音乐不该跟着跑到口袋里，也省流量
+    if (document.hidden) {
+      music?.suspend();
+      return;
+    }
     updateDayNight();
     // 跨过零点再切回来时，求签的小金点要重新出现
     refreshFortuneButton();
     void refreshWeather();
+    music?.resume();
     if (audioOn) await reviveAudio();
   });
 
   // 任何一次手势都顺手把上下文叫醒。iOS 只认手势里的 resume，
   // 没有这一手的话，切后台回来后整页就永久没声了。
   const kick = () => {
+    music?.kick();
     if (!audioOn || (host.ctx.state as string) === 'running') return;
     void reviveAudio();
   };
@@ -1007,6 +1098,8 @@ async function onStart() {
   actionsBar.classList.add('show');
 
   // 这个点击是唯一可靠的手势来源：先解锁上下文
+  // 佛乐必须在 await 之前同步 play()：iOS / 微信只认同一个任务里的手势
+  music.start();
   const ok = await host.unlock();
   if (ok) {
     audioOn = true;

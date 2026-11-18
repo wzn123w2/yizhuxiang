@@ -70,7 +70,38 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
   '.woff2': 'font/woff2',
+  // 佛乐：m4a 是 afconvert 出来的 AAC，mp3 留给直接丢进来的原文件
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
 };
+
+/**
+ * 媒体元素会带着 `Range: bytes=0-` 来要音频。没有 206 + Content-Range，
+ * 浏览器就只能整段下载、也拖不动进度，半小时的《大悲咒》尤其吃亏。
+ * 语法不合法的 Range 一律当没看见（回 200 整段）。
+ */
+function parseRange(header, size) {
+  if (typeof header !== 'string') return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return null;
+  const [, a, b] = m;
+  let start;
+  let end;
+  if (a === '') {
+    // 后缀式 bytes=-N：最后 N 个字节
+    const n = Number(b);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = Number(a);
+    end = b === '' ? size - 1 : Math.min(Number(b), size - 1);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (start > end || start >= size) return null;
+  return { start, end };
+}
 
 function serveStatic(req, res) {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) {
@@ -94,8 +125,8 @@ function serveStatic(req, res) {
     return;
   }
 
-  fs.readFile(file, (err, buf) => {
-    if (err) {
+  fs.stat(file, (err, st) => {
+    if (err || !st.isFile()) {
       // 单页应用：未知路径回 index.html
       fs.readFile(path.join(DIST, 'index.html'), (e2, html) => {
         if (e2) res.writeHead(404).end('not found');
@@ -107,12 +138,34 @@ function serveStatic(req, res) {
       return;
     }
     const ext = path.extname(file).toLowerCase();
-    const immutable = rel.startsWith('/assets/');
-    res.writeHead(200, {
+    const size = st.size;
+    // 佛乐是整段录音、内容不会变：和 assets 一样长缓存，别每次进站重下几十兆
+    const immutable = rel.startsWith('/assets/') || rel.startsWith('/audio/');
+    const headers = {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-    });
-    res.end(buf);
+      'Accept-Ranges': 'bytes',
+      'Last-Modified': st.mtime.toUTCString(),
+    };
+
+    const range = parseRange(req.headers.range, size);
+    if (range) {
+      headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`;
+      headers['Content-Length'] = String(range.end - range.start + 1);
+      res.writeHead(206, headers);
+      if (req.method === 'HEAD') return res.end();
+      fs.createReadStream(file, { start: range.start, end: range.end })
+        .on('error', () => res.destroy())
+        .pipe(res);
+      return;
+    }
+
+    headers['Content-Length'] = String(size);
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(file)
+      .on('error', () => res.destroy())
+      .pipe(res);
   });
 }
 

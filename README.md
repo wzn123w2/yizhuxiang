@@ -60,6 +60,31 @@ PORT=8787 MAX_PLAYERS=12 node server/index.mjs
 
 ---
 
+## 佛乐（public/audio）
+
+殿里有五首实录梵呗，顺序循环：`public/audio/*.m4a`。
+源文件是 320 kbps 的 mp3，进仓库前用 `afconvert` 转成了 96 kbps 的 AAC（m4a），
+39 MB 顶原先的 128 MB；人声、磬、铃都在，手机外放听不出差别。
+
+| 文件 | 曲目 |
+|---|---|
+| `01-namo-amitabha.m4a` | 南无阿弥陀佛 · 李娜 |
+| `02-heart-sutra.m4a` | 般若波罗蜜多心经 · 慧普法师 |
+| `03-shakyamuni.m4a` | 释迦牟尼佛圣号 · 则旭法师 |
+| `04-padmasambhava.m4a` | 莲花生大士心咒 · 菩提道一 |
+| `05-great-compassion.m4a` | 大悲咒 · 般禅梵唱妙音组 |
+
+播放层是 `src/audio/music.ts`：用 `<audio>` 而不是 Web Audio，理由写在文件头（分片缓冲、iOS 媒体通道、AudioContext 重建不打断）。
+
+- 顺序在 `MUSIC_TRACKS` 里改；加曲子就把 m4a 丢进 `public/audio/`，再添一行
+- 服务器对 `/audio/` 开了 `Range`（206）与长缓存，半小时的《大悲咒》能边下边听、能拖进度
+- 佛乐在放时，合成的梵呗会整条让位（`Chant.setDuck`）；关掉佛乐就回来
+- 音量、开关、下一首都在设置面板；静音和顶部「声音」按钮同一条口径，切后台自动暂停
+
+曲子版权归各自演唱/演奏者，仅作个人清修使用，别拿去做商业分发。
+
+---
+
 ## 问题反馈
 
 设置面板里的「问题反馈」点开就显示邮箱：`wzn123w2@126.com`。点邮箱直接写信，旁边的「复制邮箱」一键复制。
@@ -275,7 +300,8 @@ src/
 │  └─ controls.ts   ★ 环绕相机 + 点地/摇杆/WASD/滚轮/捏合
 ├─ audio/
 │  ├─ engine.ts     AudioHost：唯一 AudioContext 持有者，三条总线，负责解锁与重建
-│  └─ sounds.ts     木鱼 / 念珠 / 磬 / 合掌 / 上香 / 山风 / 梵呗（全部现场合成）
+│  ├─ sounds.ts     木鱼 / 念珠 / 磬 / 合掌 / 上香 / 山风 / 梵呗（全部现场合成）
+│  └─ music.ts      佛乐：五首实录梵呗顺序循环（<audio> + 淡入淡出 + 手势解锁）
 ├─ ui/
 │  └─ beads.ts      念珠横向珠串（浮点位置 + 缓动 + 过珠判定 + 自动捻珠）
 ├─ core/
@@ -292,6 +318,7 @@ server/
 └─ weather.mjs      北京天气：双源并行 + 10 分钟缓存 + 降级（GET /api/weather）
 
 data/               运行时生成：fortune.jsonl、.salt，已 gitignore
+public/audio/       五首实录梵呗（m4a），构建时原样搬进 dist/audio/
 ```
 
 ### 两个关键设计
@@ -339,6 +366,8 @@ iOS / 微信内置浏览器切后台会销毁上下文，回来必须重建。
 | 姿态（合掌角度、跪拜幅度） | `monk.ts` 的 `applyPose()` |
 | 操作键位 | `main.ts` 的 `bindUI()` 与 `Controls.readKeyboard()` |
 | 木鱼音色 | `sounds.ts` 的 `WOODFISH_VARIANTS` |
+| 佛乐曲目 / 顺序 | `src/audio/music.ts` 的 `MUSIC_TRACKS`（音频文件放 `public/audio/`） |
+| 佛乐与合成梵呗的让位 | `main.ts` 的 `updateChantProximity()` 里那句 `chant.setDuck()` |
 
 ## 已知问题
 

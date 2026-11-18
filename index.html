@@ -130,8 +130,16 @@
     <section id="settings">
       <h3>声音</h3>
       <label>环境音 <input id="vol-amb" type="range" min="0" max="100" value="32" /></label>
-      <label>诵经 <input id="vol-chant" type="range" min="0" max="100" value="62" /></label>
+      <label>梵呗（合成）<input id="vol-chant" type="range" min="0" max="100" value="62" /></label>
+      <label>佛乐（录音）<input id="vol-music" type="range" min="0" max="100" value="55" /></label>
       <label>交互音效 <input id="vol-sfx" type="range" min="0" max="100" value="70" /></label>
+      <label class="check-line">
+        <input id="music-on" type="checkbox" checked />
+        <span>循环播放佛乐</span>
+      </label>
+      <div class="hint-row" id="music-now">佛乐：—</div>
+      <button id="btn-music-next" class="ghost" type="button">下一首</button>
+      <div class="hint-row">佛乐在放时，殿里合成的梵呗会让位，免得两套调子打架；关掉佛乐，梵呗就回来。</div>
       <div class="hint-row">首次进入默认静音，之后会记住你的偏好。</div>
       <div class="hint-row" id="audio-state">音频状态：—</div>
       <button id="btn-audio-test" class="ghost" type="button">试听 · 声音自检</button>

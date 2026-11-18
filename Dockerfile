@@ -13,6 +13,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
+# 佛乐（public/audio/*.m4a）会被 vite 原样搬进 dist/audio
+COPY public ./public
 RUN npm run build
 
 # ——— 运行阶段：只留生产依赖 + server + dist ———

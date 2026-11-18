@@ -335,6 +335,8 @@ export class Chant {
   /** 0 = 远处，1 = 佛前 */
   private proxTarget = 0.3;
   private proxSent = -1;
+  /** 佛乐在放时把整条梵呗让出去：两套调子一起走会打架，1 = 正常，0 = 全让 */
+  private duck = 1;
 
   constructor(private host: AudioHost) {
     host.onRebuild(() => {
@@ -370,38 +372,41 @@ export class Chant {
 
     // 离佛越近越响；近处封顶，不把耳朵顶住
     const prox = ctx.createGain();
-    prox.gain.value = this.proxGain(this.proxTarget);
+    prox.gain.value = this.proxGain(this.proxTarget) * this.duck;
 
     out.connect(limiter).connect(prox).connect(this.host.chantBus);
     out.gain.setTargetAtTime(0.46, ctx.currentTime, 2.8);
 
-    // 殿内混响 + 一路轻回声。混响湿声收着一点，并在卷积之后把低频切掉——
-    // 低频长尾最容在耳朵里“嗡嗡”地堆起来。
+    // 殿内混响 + 一路轻回声。
+    // 上一次的湿声还是偏多：尾音一长，几个音叠在一起就成了“嗡嗡”的一团，
+    // 旋律反而听不清。这次把混响收成“只在身后托一下”的量——
+    // 时长更短、湿声更小、低频切得更狠，回声也不再多绕一圈回混响里。
     const conv = ctx.createConvolver();
-    conv.buffer = this.makeIR(ctx, 4.2, 2.6);
+    conv.buffer = this.makeIR(ctx, 2.0, 3.8);
     const wetHp = ctx.createBiquadFilter();
     wetHp.type = 'highpass';
-    wetHp.frequency.value = 200;
+    wetHp.frequency.value = 320;
     wetHp.Q.value = 0.6;
     const wetLp = ctx.createBiquadFilter();
     wetLp.type = 'lowpass';
-    wetLp.frequency.value = 3000;
+    wetLp.frequency.value = 2400;
     const wet = ctx.createGain();
-    wet.gain.value = 0.32;
+    wet.gain.value = 0.10;
     conv.connect(wetHp).connect(wetLp).connect(wet).connect(out);
 
     const echo = ctx.createDelay(1.5);
-    echo.delayTime.value = 0.47;
+    echo.delayTime.value = 0.34;
     const fb = ctx.createGain();
-    fb.gain.value = 0.22;
+    fb.gain.value = 0.10;
     const echoLp = ctx.createBiquadFilter();
     echoLp.type = 'lowpass';
-    echoLp.frequency.value = 2200;
+    echoLp.frequency.value = 1800;
     echo.connect(echoLp).connect(fb).connect(echo);
     const echoWet = ctx.createGain();
-    echoWet.gain.value = 0.16;
+    echoWet.gain.value = 0.06;
     echo.connect(echoWet).connect(out);
-    echo.connect(conv); // 回声再落进混响，尾巴更长
+    // 回声不再送回混响：两路尾巴相加，就是之前那股散不掉的糊音
+    // echo.connect(conv);
 
     // ——— 低音持续：只做“殿里有人”的底，不抢旋律
     const lp = ctx.createBiquadFilter();
@@ -447,7 +452,8 @@ export class Chant {
     pad.gain.linearRampToValueAtTime(0.038, ctx.currentTime + 8);
     padLp.connect(pad);
     pad.connect(out);
-    pad.connect(conv);
+    // 和声垫本身已经够“远”，不再往混响里加料
+    // pad.connect(conv);
 
     for (const [f, lvl] of [
       [146.83, 1],
@@ -500,9 +506,23 @@ export class Chant {
     }
     if (Math.abs(v - this.proxSent) < 0.006) return;
     this.proxSent = v;
+    this.applyProx();
+  }
+
+  /** 佛乐接管时整条让位（0），关掉佛乐再回来（1）。淡得慢一点，别听出开关 */
+  setDuck(v: number): void {
+    const d = Math.max(0, Math.min(1, v));
+    if (Math.abs(d - this.duck) < 0.01) return;
+    this.duck = d;
+    this.applyProx();
+  }
+
+  private applyProx(): void {
+    if (!this.prox) return;
     const ctx = this.ctx;
     if (ctx.state === 'closed') return;
-    this.prox.gain.setTargetAtTime(this.proxGain(v), ctx.currentTime, 1.1);
+    const g = this.proxGain(this.proxSent) * this.duck;
+    this.prox.gain.setTargetAtTime(g, ctx.currentTime, this.duck > 0 ? 1.1 : 0.5);
   }
 
   private proxGain(t: number): number {
@@ -569,7 +589,7 @@ export class Chant {
       [2.004, 0.16, 1.7], // 八度泛音
       [3.01, 0.06, 1.0],
       [4.98, 0.025, 0.6],
-      [0.5, 0.12, 3.8], // 低八度的影子，像殿角有人应和
+      [0.5, 0.08, 2.6], // 低八度的影子，像殿角有人应和
     ];
     for (const [ratio, amp, decay] of parts) {
       const osc = ctx.createOscillator();
