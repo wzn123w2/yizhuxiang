@@ -362,6 +362,7 @@ iOS / 微信内置浏览器切后台会销毁上下文，回来必须重建。
 | 台阶高差 | `temple.ts` 的 `YARD_Y` 与 `groundHeightAt()` |
 | 佛像比例 | `temple.ts` 里 `legs` / `torsoProfile` / `shoulders` / `arms` 那一段 |
 | 白天黑夜的色调 | `temple.ts` 的 `DAY` / `NIGHT` 两个常量 |
+| 天空颜色（晴 / 阴 / 雨 / 雪） | `temple.ts` 的 `WEATHER_DAY` 与 `DAY` / `NIGHT` 里的 `skyTop` / `skyBottom` |
 | 小沙弥胖瘦、袈裟颜色 | `Monk` 构造函数参数 + `torso` 的 `scale` |
 | 姿态（合掌角度、跪拜幅度） | `monk.ts` 的 `applyPose()` |
 | 操作键位 | `main.ts` 的 `bindUI()` 与 `Controls.readKeyboard()` |

@@ -1966,6 +1966,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
           float h = normalize(vPos).y;
           float f = pow(clamp(h * 0.5 + 0.5, 0.0, 1.0), exponent);
           gl_FragColor = vec4(mix(bottomColor, topColor, f), 1.0);
+          // 自定义 shader 不会自己做输出转换。少了这一句，写进画面的就是线性值，
+          // 显示时被当成 sRGB 直接读，整片天空会暗一大截、颜色也发闷。
+          #include <colorspace_fragment>
         }
       `,
     }),
@@ -2270,8 +2273,11 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
    */
   const WEATHER_DAY: Record<WeatherKind, Partial<Palette>> = {
     clear: {
-      skyTop: new THREE.Color(0x2f86d6),
-      skyBottom: new THREE.Color(0xd8f0fc),
+      // 晴天的蓝要“透”：天顶是洗过的蔚蓝，靠近地平线也只是淡淡一层青，
+      // 不能发灰。两端都往蓝里靠（地平线不用接近白的颜色），
+      // 因为线性空间里混白会把整片天空洗成一层雾。
+      skyTop: new THREE.Color(0x1e74d2),
+      skyBottom: new THREE.Color(0x9fcfef),
       fog: new THREE.Color(0xc9deed),
       fogD: 0.0038,
       sunI: 2.75,
