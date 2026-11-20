@@ -44,6 +44,9 @@ export class Controls {
   private ray = new THREE.Raycaster();
   private ideal = new THREE.Vector3();
   private rayDir = new THREE.Vector3();
+  /** 遮挡射线的节流：拾取按 30Hz 跑就够，不必每帧都算 */
+  private collideClock = 0;
+  private collideLimit = Infinity;
 
   private aziT = 0;
   private polarT = 1.26;
@@ -128,17 +131,29 @@ export class Controls {
     }
 
     // 相机碰撞：从注视点往理想机位打一条线，撞到屋顶/墙就收到撞点前面
+    // 拾取按 30Hz 节流（贴墙走也看不出滞后），省下每帧一次 raycast
     if (this.occluders.length) {
-      this.rayDir.copy(this.ideal).sub(this.focus);
-      const want = this.rayDir.length();
-      if (want > 0.001) {
-        this.rayDir.divideScalar(want);
-        this.ray.set(this.focus, this.rayDir);
-        this.ray.far = want;
-        const hit = this.ray.intersectObjects(this.occluders, false)[0];
-        if (hit && hit.distance < want) {
-          const d = Math.max(this.minDistClamp, hit.distance - this.collidePadding);
-          this.ideal.copy(this.focus).addScaledVector(this.rayDir, d);
+      this.collideClock += dt;
+      if (this.collideClock > 1 / 30) {
+        this.collideClock = 0;
+        this.collideLimit = Infinity;
+        this.rayDir.copy(this.ideal).sub(this.focus);
+        const want = this.rayDir.length();
+        if (want > 0.001) {
+          this.rayDir.divideScalar(want);
+          this.ray.set(this.focus, this.rayDir);
+          this.ray.far = want;
+          const hit = this.ray.intersectObjects(this.occluders, false)[0];
+          if (hit && hit.distance < want) this.collideLimit = hit.distance;
+        }
+      }
+      if (this.collideLimit < Infinity) {
+        this.rayDir.copy(this.ideal).sub(this.focus);
+        const want = this.rayDir.length();
+        if (want > 0.001) {
+          this.rayDir.divideScalar(want);
+          const d = Math.max(this.minDistClamp, this.collideLimit - this.collidePadding);
+          if (d < want) this.ideal.copy(this.focus).addScaledVector(this.rayDir, d);
         }
       }
     }

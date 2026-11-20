@@ -92,8 +92,15 @@ const floaters = $('floaters');
 const toastEl = $('toast');
 
 const UP = new THREE.Vector3(0, 1, 0);
+/** 每帧都会用到的临时向量：只在模块级建一次，别在 frame() 里 new */
+const focusWant = new THREE.Vector3();
+const ndcVec = new THREE.Vector2();
+const moveFwd = new THREE.Vector3();
+const moveRight = new THREE.Vector3();
+const moveDir = new THREE.Vector3();
+const moveToTmp = new THREE.Vector3();
 /** 殿内宽度的一半（与 temple.ts 的 HALL_HW 对应），用来判断"是否在殿内" */
-const HALL_HALF_W = 12;
+const HALL_HALF_W = 24;
 /** 殿外的相机高度上限：取一个够大的数，好让殿内外的切换能插值过渡 */
 const CAMY_FREE = 40;
 let camYLimit: number | null = null;
@@ -105,7 +112,11 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance',
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+/** 屏幕像素比上限：手机上 DPR 常常是 3，按 2 渲染已经是 4 倍像素 */
+const DPR_MAX = Math.min(window.devicePixelRatio || 1, 2);
+/** 当前实际用的像素比（自适应下调 / 回升） */
+let dprCur = DPR_MAX;
+renderer.setPixelRatio(dprCur);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -223,11 +234,11 @@ function floater(world: THREE.Vector3, text: string, quote = false) {
 
 function pickCushionAt(clientX: number, clientY: number): Cushion | null {
   if (!cushionGroups.length) return null;
-  const ndc = new THREE.Vector2(
+  ndcVec.set(
     (clientX / window.innerWidth) * 2 - 1,
     -(clientY / window.innerHeight) * 2 + 1,
   );
-  raycaster.setFromCamera(ndc, camera);
+  raycaster.setFromCamera(ndcVec, camera);
   const hit = raycaster.intersectObjects(cushionGroups, true)[0];
   if (!hit) return null;
 
@@ -1628,10 +1639,13 @@ let prevNow = performance.now();
 let dnTimer = 0;
 
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - prevNow) / 1000);
+  const rawDt = (now - prevNow) / 1000;
+  const dt = Math.min(0.05, rawDt);
   prevNow = now;
   const t = now / 1000;
   movedThisFrame = false;
+
+  adaptResolution(rawDt);
 
   updateMovement(dt);
 
@@ -1677,10 +1691,11 @@ function frame(now: number) {
   temple.update(dt, t);
   weatherVfx?.update(dt, t, camera.position.x, camera.position.z);
 
-  // 镜头跟随
+  // 镜头跟随（复用临时向量，避免每帧 new）
   const focusY = sitting ? 0.72 : 1.02;
-  const want = monk.root.position.clone().add(new THREE.Vector3(0, focusY, 0));
-  controls.focus.lerp(want, Math.min(1, dt * 5.5));
+  const p0 = monk.root.position;
+  focusWant.set(p0.x, p0.y + focusY, p0.z);
+  controls.focus.lerp(focusWant, Math.min(1, dt * 5.5));
   controls.minCamY = monk.root.position.y + 0.55;
   // 在殿内时把相机压在天花板以下，否则拉远会翻到屋顶外面去。
   // 用插值过渡，避免跨过门槛那一刻镜头突然跳一下。
@@ -1701,9 +1716,6 @@ function frame(now: number) {
   }
 
   requestAnimationFrame(frame);
-
-  // 公告等首屏落稳再弹，别和开门动画抢
-  window.setTimeout(showUpdateNotice, 420);
 }
 
 function updateMovement(dt: number) {
@@ -1733,24 +1745,24 @@ function updateMovement(dt: number) {
     pendingIncense = false;
     pendingFortune = false;
 
-    const fwd = new THREE.Vector3();
-    camera.getWorldDirection(fwd);
-    fwd.y = 0;
-    fwd.normalize();
-    const right = new THREE.Vector3().crossVectors(fwd, UP).normalize();
+    camera.getWorldDirection(moveFwd);
+    moveFwd.y = 0;
+    moveFwd.normalize();
+    moveRight.crossVectors(moveFwd, UP).normalize();
 
-    const move = new THREE.Vector3()
-      .addScaledVector(right, ix)
-      .addScaledVector(fwd, -iz);
-    if (move.lengthSq() > 0.0001) {
-      move.normalize();
-      stepTo(move, dt, 2.4 + Math.min(1.4, Math.hypot(ix, iz) * 1.4));
+    moveDir
+      .copy(moveFwd)
+      .multiplyScalar(-iz)
+      .addScaledVector(moveRight, ix);
+    if (moveDir.lengthSq() > 0.0001) {
+      moveDir.normalize();
+      stepTo(moveDir, dt, 2.4 + Math.min(1.4, Math.hypot(ix, iz) * 1.4));
     }
     return;
   }
 
   if (moveTarget) {
-    const to = moveTarget.clone().sub(monk.root.position);
+    const to = moveToTmp.copy(moveTarget).sub(monk.root.position);
     to.y = 0;
     const d = to.length();
     if (d < 0.16) {
@@ -1766,11 +1778,34 @@ function updateMovement(dt: number) {
 
 // ————————————————————————————— 尺寸
 
+let fpsAcc = 0;
+let fpsFrames = 0;
+/**
+ * 自适应分辨率：帧时间持续超过 1/40 秒就降一档像素比，
+ * 稳到 1/56 以上再慢慢加回去（上限 = 屏幕 DPR，最多 2）。
+ * 山寺这种满屏光照的场景在手机上几乎总是像素瓶颈，降像素比是最直接的一招。
+ */
+function adaptResolution(rawDt: number) {
+  if (document.hidden) return;
+  fpsAcc += rawDt;
+  fpsFrames++;
+  if (fpsAcc < 2) return;
+  const avg = fpsAcc / fpsFrames;
+  fpsAcc = 0;
+  fpsFrames = 0;
+  let next = dprCur;
+  if (avg > 1 / 40) next = Math.max(1, dprCur - 0.25);
+  else if (avg < 1 / 56 && dprCur < DPR_MAX) next = Math.min(DPR_MAX, dprCur + 0.25);
+  if (Math.abs(next - dprCur) < 0.01) return;
+  dprCur = next;
+  onResize();
+}
+
 function onResize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
   renderer.setSize(w, h, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(dprCur);
   controls.resize(w, h);
 }
 

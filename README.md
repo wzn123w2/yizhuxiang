@@ -205,14 +205,15 @@ POST /api/fortune   { "device": "..." }
 
 ```
         z=-10  ┌─────────────┐  佛殿后墙
-               │   佛坛 · 佛像  │
-               │   12 张坐垫   │  ← 殿内（地面 y=0）
+               │   佛坛·千手观音  │
+               │   20 张坐垫   │  ← 殿内（地面 y=0）
         z=+10  └──┬───────┬──┘  敞开的前廊
                   │ 三级台阶 │     y: 0 → -0.9
         z=+12.7 ┌─┴───────┴─┐
                │  石板路     │
                │  假山 · 水池 │  ← 庭院（地面 y=-0.9）
-               │  松树 · 石灯 │
+               │ 松树 · 枫树 · 石灯 │
+               │ 钟楼（东南角） │
         z=+34   └── 月洞门 ──┘
 ```
 
@@ -291,9 +292,9 @@ POST /api/fortune   { "device": "..." }
 ```
 src/
 ├─ world/
-│  ├─ textures.ts   程序生成纹理（石板、木纹、墙面、光晕、烟雾）
-│  ├─ temple.ts     ★ 大殿：佛坛、佛像、柱、灯笼、坐垫、香炉、木鱼台、钟、
-│  │                  香火粒子、昼夜灯光
+│  ├─ textures.ts   程序生成纹理（石板、木纹、墙面、光晕、烟雾、铜钟、碑）
+│  ├─ temple.ts     ★ 大殿：佛坛、千手千眼观音、万佛龛、回廊、柱、灯笼、
+│  │                  坐垫、香炉、木鱼台、钟、钟楼、红枫落叶、昼夜灯光
 │  ├─ monk.ts       ★ 小沙弥：纯几何体拼装 + 姿态目标值插值
 │  └─ weather.ts    云 / 雨 / 雪 / 地面涟漪（粒子与贴图都现场生成）
 ├─ game/
@@ -359,8 +360,11 @@ iOS / 微信内置浏览器切后台会销毁上下文，回来必须重建。
 |---|---|
 | 大殿尺寸 / 柱子位置 / 坐垫排布 | `temple.ts` 顶部的 `HALL_HW`、`HALL_HD`、`pillarPositions`、`rows` |
 | 庭院大小 / 假山 / 水池 / 树 | `temple.ts` 的 `YARD_HW`、`YARD_END`、`rockery()`、`pine()`、`stoneLantern()` 调用处 |
+| 红枫 / 落叶 / 秋天草地 | `temple.ts` 的 `maple()` 调用处、落叶数量；`textures.ts` 的 `autumnGrassTexture()`、`mapleLeafTexture()` |
 | 台阶高差 | `temple.ts` 的 `YARD_Y` 与 `groundHeightAt()` |
-| 佛像比例 | `temple.ts` 里 `legs` / `torsoProfile` / `shoulders` / `arms` 那一段 |
+| 千手观音的比例 / 42 臂 | `temple.ts` 的 `makeGuanyin()`：`skirt` / `torso` / 头面 / `rings` 那几段 |
+| 万佛龛 / 回廊 / 背屏 | `temple.ts` 的 `wanfoWall()` 调用处、`GALLERY_Y`、背屏与背光那一段 |
+| 钟楼位置 / 铜钟 / 石碑 | `temple.ts` 的「钟楼（院落东南角）」那一段（`TX`、`TZ`、`hipRoof` 尺寸）；`textures.ts` 的 `bellTexture()`、`steleTexture()` |
 | 白天黑夜的色调 | `temple.ts` 的 `DAY` / `NIGHT` 两个常量 |
 | 天空颜色（晴 / 阴 / 雨 / 雪） | `temple.ts` 的 `WEATHER_DAY` 与 `DAY` / `NIGHT` 里的 `skyTop` / `skyBottom` |
 | 小沙弥胖瘦、袈裟颜色 | `Monk` 构造函数参数 + `torso` 的 `scale` |

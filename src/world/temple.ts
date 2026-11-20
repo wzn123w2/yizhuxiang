@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeatherKind } from '../core/weather';
 import {
   stoneFloorTexture,
@@ -6,7 +7,8 @@ import {
   plasterTexture,
   glowTexture,
   smokeTexture,
-  grassTexture,
+  autumnGrassTexture,
+  mapleLeafTexture,
   pathTexture,
   glazedRoofTexture,
   caihuaTexture,
@@ -19,7 +21,12 @@ import {
   cofferTexture,
   interiorWallTexture,
   drapeTexture,
-  altarClothTexture,
+  robeTexture,
+  wanfoNicheTexture,
+  thousandHandHaloTexture,
+  coupletTexture,
+  bellTexture,
+  steleTexture,
 } from './textures';
 
 export interface Cushion {
@@ -80,17 +87,17 @@ export interface Temple {
 
 // ————————————— 尺寸（单位≈米）
 
-const HALL_HW = 12;
+const HALL_HW = 24;
 const HALL_HD = 10;
 const CEIL = 6.4;
 
 const STEP_Z0 = 10.9; // 殿内地板到此为止
 const YARD_Z = 12.7; // 庭院地面开始
 const YARD_Y = -0.9; // 庭院比殿内低
-const YARD_HW = 17.2;
+const YARD_HW = 31;
 const YARD_END = 33.2;
 const WALL_Z = 34.2;
-const WALL_X = 18;
+const WALL_X = 32;
 
 const BURNER_X = -6.5;
 const BURNER_Z = 0.9;
@@ -222,22 +229,106 @@ function hipRoof(
   return mesh;
 }
 
+// ————————————— 静态合批
+
+const _bq = new THREE.Quaternion();
+const _be = new THREE.Euler();
+const _bv = new THREE.Vector3();
+const _bs = new THREE.Vector3();
+const _bm = new THREE.Matrix4();
+
+/**
+ * 静态合批：把一批“位置固定、材质相同”的小零件合成一个几何体。
+ *
+ * 山寺里这类零件很多（墙裙立柱、望柱、岸石、签筒里的签、松枝…），
+ * 每个都是一次 draw call。合起来外观不变，draw call 从 N 降到“材质数”。
+ *
+ * 用法：建完一批后 `build(group)`，加进去的就是合并后的网格。
+ */
+class StaticBatch {
+  private parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  private shadows = false;
+  private receives = false;
+
+  /** 加一件：位置 / 旋转 / 缩放直接给（几何体在 build 时烘进顶点） */
+  add(
+    geo: THREE.BufferGeometry,
+    mat: THREE.Material,
+    x = 0,
+    y = 0,
+    z = 0,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1,
+  ): this {
+    _bm.compose(
+      _bv.set(x, y, z),
+      _bq.setFromEuler(_be.set(rx, ry, rz)),
+      _bs.set(sx, sy, sz),
+    );
+    const g = geo.clone().applyMatrix4(_bm);
+    geo.dispose();
+    const list = this.parts.get(mat);
+    if (list) list.push(g);
+    else this.parts.set(mat, [g]);
+    return this;
+  }
+
+  shadow(v = true): this {
+    this.shadows = v;
+    return this;
+  }
+
+  receive(v = true): this {
+    this.receives = v;
+    return this;
+  }
+
+  build(parent: THREE.Object3D): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    for (const [mat, geos] of this.parts) {
+      // mergeGeometries 要求“都有索引”或“都没索引”，混了就统一转成非索引
+      const list = geos.some((g) => !g.index)
+        ? geos.map((g) => (g.index ? g.toNonIndexed() : g))
+        : geos;
+      const merged = mergeGeometries(list, false);
+      for (const g of geos) g.dispose();
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.castShadow = this.shadows;
+      mesh.receiveShadow = this.receives;
+      mesh.matrixAutoUpdate = false;
+      parent.add(mesh);
+      out.push(mesh);
+    }
+    this.parts.clear();
+    return out;
+  }
+}
+
 export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Temple {
   const group = new THREE.Group();
   scene.add(group);
 
+
   const floorTex = stoneFloorTexture();
+  // 殿面宽 48m：石板按 6m 左右一格，别让 4 个循环拉成一张大糊图
+  floorTex.repeat.set(8, 3.3);
   const woodTex = woodTexture();
   const wallTex = plasterTexture();
   const glowTex = glowTexture();
   const smokeTex = smokeTexture();
-  const grassTex = grassTexture();
+  const grassTex = autumnGrassTexture();
   const pathTex = pathTexture();
   const roofTex = glazedRoofTexture();
   const caihuaTex = caihuaTexture();
   const latticeTex = latticeDoorTexture();
   const roundWinTex = roundWindowTexture();
   const cofferTex = cofferTexture();
+  cofferTex.repeat.set(16, 7);
   const interiorWallTex = interiorWallTexture();
 
   // ————————————— 材质
@@ -416,7 +507,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   ];
   for (let i = 0; i < 3; i++) {
     const h = 0.3 * (3 - i);
-    const s = new THREE.Mesh(new THREE.BoxGeometry(20, h, 0.62), stepMats);
+    const s = new THREE.Mesh(new THREE.BoxGeometry(24, h, 0.62), stepMats);
     s.position.set(0, -0.3 * (i + 1) - h / 2 + 0.02, 11.35 + i * 0.6);
     s.receiveShadow = true;
     s.castShadow = true;
@@ -426,7 +517,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   // 台阶两侧的垂带石，把大平面切碎
   for (const sx of [-1, 1]) {
     const cheek = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.05, 2.1), matStoneSolid);
-    cheek.position.set(sx * 11.4, -0.42, 11.6);
+    cheek.position.set(sx * 12.4, -0.42, 11.6);
     cheek.rotation.z = sx * 0.02;
     cheek.castShadow = true;
     cheek.receiveShadow = true;
@@ -437,7 +528,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   const yardGround = new THREE.Mesh(
     new THREE.PlaneGeometry(120, 90),
-    new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, color: 0xd2dcc4 }),
+    new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1 }),
   );
   yardGround.rotation.x = -Math.PI / 2;
   yardGround.position.set(0, YARD_Y, 40);
@@ -526,24 +617,35 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const EAVE_Y = 7.0;
 
   // 下檐（腰檐）：挑出 2.4m，坡度约 27°，比第一版陡，免得看上去像一块平板
-  const roofLower = hipRoof(14.4, 12.6, 9.6, 7.4, EAVE_Y, 9.35, matGlazed, {
-    cornerLift: 0.62,
-    lip: { h: 0.24, mat: matDarkWood },
-  });
+  const roofLower = hipRoof(
+    HALL_HW + 2.4,
+    HALL_HD + 2.6,
+    HALL_HW - 2.4,
+    HALL_HD - 2.6,
+    EAVE_Y,
+    9.35,
+    matGlazed,
+    {
+      cornerLift: 0.62,
+      lip: { h: 0.24, mat: matDarkWood },
+    },
+  );
   roofLower.castShadow = true;
   roofLower.receiveShadow = true;
   group.add(roofLower);
   occluders.push(roofLower);
 
   // 两层屋檐之间被遮住的墙，兼作“防穿帮”的封口
-  const clerestory = hipRoof(10.4, 8.3, 0.12, 0.12, 9.2, 9.8, matWallOuter, {
+  const clerestory = hipRoof(HALL_HW - 1.6, 8.3, 0.12, 0.12, 9.2, 9.8, matWallOuter, {
     segs: 3,
     sideSegs: 4,
   });
   group.add(clerestory);
 
   // 上檐：收进去、抬得更高，整座殿才有“重檐”的高度感
-  const roofUpper = hipRoof(12.0, 10.0, 5.7, 0, 9.95, 13.0, matGlazed, { cornerLift: 0.5 });
+  const roofUpper = hipRoof(HALL_HW, HALL_HD, HALL_HW * 0.475, 0, 9.95, 13.0, matGlazed, {
+    cornerLift: 0.5,
+  });
   roofUpper.castShadow = true;
   roofUpper.receiveShadow = true;
   group.add(roofUpper);
@@ -551,10 +653,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // 上檐下的第二道彩画带：参考图两层屋檐下都有蓝绿彩绘 + 斗拱
   for (const [len, x, z, rotY] of [
-    [22.8, 0, 9.2, 0],
-    [22.8, 0, -9.2, 0],
-    [17.2, 11.2, 0, Math.PI / 2],
-    [17.2, -11.2, 0, Math.PI / 2],
+    [HALL_HW * 2 - 1.2, 0, HALL_HD - 0.8, 0],
+    [HALL_HW * 2 - 1.2, 0, -HALL_HD + 0.8, 0],
+    [HALL_HD * 2 - 2.8, HALL_HW - 0.8, 0, Math.PI / 2],
+    [HALL_HD * 2 - 2.8, -HALL_HW + 0.8, 0, Math.PI / 2],
   ] as Array<[number, number, number, number]>) {
     const band = new THREE.Mesh(new THREE.BoxGeometry(len, 0.58, 0.26), caihuaMat(len));
     band.position.set(x, 9.62, z);
@@ -563,13 +665,14 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   }
 
   // 正脊：绿琉璃，两端各一个上翘的鸱吻
-  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(12.6, 0.46, 0.62), matRidge);
+  const ridgeLen = HALL_HW * 1.05;
+  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(ridgeLen, 0.46, 0.62), matRidge);
   ridgeBeam.position.set(0, 13.08, 0);
   ridgeBeam.castShadow = true;
   group.add(ridgeBeam);
   occluders.push(ridgeBeam);
 
-  const ridgeCap = new THREE.Mesh(new THREE.BoxGeometry(12.8, 0.12, 0.78), matGold);
+  const ridgeCap = new THREE.Mesh(new THREE.BoxGeometry(ridgeLen + 0.2, 0.12, 0.78), matGold);
   ridgeCap.position.set(0, 13.34, 0);
   group.add(ridgeCap);
 
@@ -585,14 +688,14 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       new THREE.ExtrudeGeometry(s, { depth: 0.2, bevelEnabled: false, curveSegments: 8 }),
       matRidge,
     );
-    wen.position.set(sx * 6.3, 13.1, -0.1);
+    wen.position.set(sx * (ridgeLen / 2), 13.1, -0.1);
     wen.rotation.y = sx > 0 ? Math.PI : 0;
     wen.rotation.z = sx * 0.16;
     wen.castShadow = true;
     group.add(wen);
 
     const horn = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.5, 6), matGold);
-    horn.position.set(sx * 6.68, 14.05, 0);
+    horn.position.set(sx * (ridgeLen / 2 + 0.38), 14.05, 0);
     horn.rotation.z = sx * 0.5;
     group.add(horn);
   }
@@ -601,10 +704,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // 天花上方的“围脊”：两檐之间一道彩画带 + 斗拱，从底下抬头能看到
   for (const [len, x, z, rotY] of [
-    [27, 0, HALL_HD - 0.6, 0],
-    [27, 0, -HALL_HD + 0.6, 0],
-    [20, HALL_HW - 0.6, 0, Math.PI / 2],
-    [20, -HALL_HW + 0.6, 0, Math.PI / 2],
+    [HALL_HW * 2 + 3, 0, HALL_HD - 0.6, 0],
+    [HALL_HW * 2 + 3, 0, -HALL_HD + 0.6, 0],
+    [HALL_HD * 2, HALL_HW - 0.6, 0, Math.PI / 2],
+    [HALL_HD * 2, -HALL_HW + 0.6, 0, Math.PI / 2],
   ] as Array<[number, number, number, number]>) {
     const band = new THREE.Mesh(new THREE.BoxGeometry(len, 0.62, 0.28), caihuaMat(len));
     band.position.set(x, EAVE_Y - 0.62, z);
@@ -627,10 +730,18 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   group.add(ceiling);
   occluders.push(ceiling);
 
-  for (let i = 0; i < 5; i++) {
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(HALL_HW * 2, 0.32, 0.36), matDarkWood);
-    beam.position.set(0, CEIL - 0.2, -HALL_HD + 2 + i * 4);
-    group.add(beam);
+  {
+    const beams = new StaticBatch();
+    for (let i = 0; i < 5; i++) {
+      beams.add(
+        new THREE.BoxGeometry(HALL_HW * 2, 0.32, 0.36),
+        matDarkWood,
+        0,
+        CEIL - 0.2,
+        -HALL_HD + 2 + i * 4,
+      );
+    }
+    beams.build(group);
   }
 
   // ————————————— 殿内墙面：红木墙裙 + 幡 + 佛前帷幔 + 壁灯
@@ -643,38 +754,69 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     metalness: 0.05,
   });
   const WAINSCOT_H = 1.15;
+  /** 墙裙的立柱：原来每根一次 draw（将近 20 次），合起来只剩 1 次 */
+  const wainscotPosts = new StaticBatch();
+  const wainscotSkirts = new StaticBatch();
+  const wainscotRails = new StaticBatch();
 
   // 后墙墙裙
   {
     const w = HALL_HW * 2 - 0.2;
-    const skirt = new THREE.Mesh(new THREE.BoxGeometry(w, WAINSCOT_H, 0.1), matWainscot);
-    skirt.position.set(0, WAINSCOT_H / 2, -HALL_HD + 0.4);
-    group.add(skirt);
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, 0.16), matGold);
-    rail.position.set(0, WAINSCOT_H + 0.035, -HALL_HD + 0.4);
-    group.add(rail);
+    wainscotSkirts.add(
+      new THREE.BoxGeometry(w, WAINSCOT_H, 0.1),
+      matWainscot,
+      0,
+      WAINSCOT_H / 2,
+      -HALL_HD + 0.4,
+    );
+    wainscotRails.add(
+      new THREE.BoxGeometry(w, 0.07, 0.16),
+      matGold,
+      0,
+      WAINSCOT_H + 0.035,
+      -HALL_HD + 0.4,
+    );
     for (let x = -HALL_HW + 2.4; x <= HALL_HW - 2.4; x += 2.4) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, WAINSCOT_H, 0.13), matDarkWood);
-      post.position.set(x, WAINSCOT_H / 2, -HALL_HD + 0.47);
-      group.add(post);
+      wainscotPosts.add(
+        new THREE.BoxGeometry(0.06, WAINSCOT_H, 0.13),
+        matDarkWood,
+        x,
+        WAINSCOT_H / 2,
+        -HALL_HD + 0.47,
+      );
     }
   }
 
   // 两侧墙裙
   for (const sx of [-1, 1]) {
     const d = HALL_HD * 2 - 0.2;
-    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, WAINSCOT_H, d), matWainscot);
-    skirt.position.set(sx * (HALL_HW - 0.4), WAINSCOT_H / 2, 0);
-    group.add(skirt);
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.07, d), matGold);
-    rail.position.set(sx * (HALL_HW - 0.4), WAINSCOT_H + 0.035, 0);
-    group.add(rail);
+    wainscotSkirts.add(
+      new THREE.BoxGeometry(0.1, WAINSCOT_H, d),
+      matWainscot,
+      sx * (HALL_HW - 0.4),
+      WAINSCOT_H / 2,
+      0,
+    );
+    wainscotRails.add(
+      new THREE.BoxGeometry(0.16, 0.07, d),
+      matGold,
+      sx * (HALL_HW - 0.4),
+      WAINSCOT_H + 0.035,
+      0,
+    );
     for (let z = -HALL_HD + 2.4; z <= HALL_HD - 2.4; z += 2.4) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.13, WAINSCOT_H, 0.06), matDarkWood);
-      post.position.set(sx * (HALL_HW - 0.47), WAINSCOT_H / 2, z);
-      group.add(post);
+      wainscotPosts.add(
+        new THREE.BoxGeometry(0.13, WAINSCOT_H, 0.06),
+        matDarkWood,
+        sx * (HALL_HW - 0.47),
+        WAINSCOT_H / 2,
+        z,
+      );
     }
   }
+  wainscotSkirts.build(group);
+  wainscotRails.build(group);
+  wainscotPosts.build(group);
 
   // 幡：两侧各三条，佛前再挂两条
   const bannerTexA = bannerTexture('#d9a63f');
@@ -696,14 +838,14 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   for (const sx of [-1, 1]) {
     for (const z of [-7.2, -4.2, -1.2, 1.8, 4.8]) {
       banners.push({
-        x: sx * (HALL_HW - 0.55),
+        x: sx * (HALL_HW - 1.98),
         z,
         ry: sx > 0 ? -Math.PI / 2 : Math.PI / 2,
         tex: bi++ % 2 ? bannerTexB : bannerTexA,
       });
     }
   }
-  for (const x of [-8.2, 8.2]) {
+  for (const x of [-16.0, -9.2, 9.2, 16.0]) {
     banners.push({ x, z: -HALL_HD + 0.55, ry: 0, tex: bannerTexA });
   }
 
@@ -736,11 +878,11 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     emissiveMap: valanceTex,
     emissiveIntensity: 0.1,
   });
-  const valance = new THREE.Mesh(new THREE.PlaneGeometry(14.2, 1.55), valanceMat);
-  valance.position.set(0, 5.62, -HALL_HD + 0.55);
+  const valance = new THREE.Mesh(new THREE.PlaneGeometry(10.6, 1.55), valanceMat);
+  valance.position.set(0, 5.62, -HALL_HD + 0.66);
   group.add(valance);
 
-  // 帷幔两侧的深红垂幔，把佛龛框起来（参考照片里佛前是红绸围出的龛）
+  // 千手观音的背屏：四幅深红垂幔从莲台上方一直挂到天花
   const drapeTex = drapeTexture();
   const drapeMat = new THREE.MeshStandardMaterial({
     map: drapeTex,
@@ -752,24 +894,157 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     emissiveMap: drapeTex,
     emissiveIntensity: 0.08,
   });
+  {
+    const tex = drapeTex.clone();
+    tex.needsUpdate = true;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.repeat.set(5, 1);
+    const backMat = new THREE.MeshStandardMaterial({
+      map: tex,
+      transparent: true,
+      alphaTest: 0.06,
+      side: THREE.DoubleSide,
+      roughness: 0.9,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: tex,
+      emissiveIntensity: 0.06,
+    });
+    const back = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 4.3), backMat);
+    back.position.set(0, 3.89, -HALL_HD + 0.53);
+    group.add(back);
+  }
+
+  // 帷幔两侧的深红垂幔，把佛龛框起来（参考照片里佛前是红绸围出的龛）
   for (const sx of [-1, 1]) {
-    const drape = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 3.95), drapeMat);
-    drape.position.set(sx * 7.2, 4.45, -HALL_HD + 0.56);
+    const drape = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 3.95), drapeMat);
+    drape.position.set(sx * 4.55, 4.45, -HALL_HD + 0.58);
     group.add(drape);
   }
 
-  // 三世佛背后的大红帐：把佛龛那一面墙衬成深红，而不是一片米白
-  const altarClothTex = altarClothTexture();
-  const altarClothMat = new THREE.MeshStandardMaterial({
-    map: altarClothTex,
-    roughness: 0.9,
-    emissive: new THREE.Color(0xffffff),
-    emissiveMap: altarClothTex,
-    emissiveIntensity: 0.05,
-  });
-  const altarCloth = new THREE.Mesh(new THREE.PlaneGeometry(13.2, 3.95), altarClothMat);
-  altarCloth.position.set(0, 3.1, -HALL_HD + 0.52);
-  group.add(altarCloth);
+  // ————————————— 万佛龛：大乘之阁东西山墙那一面「万佛」壁
+  // 平铺的一张暖光龛壁贴图：每个小龛里一尊小金佛，夜里自带一点亮
+  const nicheTex = wanfoNicheTexture();
+  function wanfoWall(w: number, h: number, x: number, y: number, z: number, ry = 0) {
+    const tex = nicheTex.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(w / 1.9, h / 1.9);
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      emissive: 0xffcf8a,
+      emissiveMap: tex,
+      emissiveIntensity: 0.22,
+      roughness: 0.92,
+      metalness: 0.04,
+    });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    m.position.set(x, y, z);
+    m.rotation.y = ry;
+    group.add(m);
+  }
+  // 后墙两侧（中央留给千手背光）
+  const backNicheW = HALL_HW - 5.4;
+  const backNicheX = 4.95 + backNicheW / 2;
+  wanfoWall(backNicheW, 4.85, -backNicheX, 3.63, -HALL_HD + 0.4);
+  wanfoWall(backNicheW, 4.85, backNicheX, 3.63, -HALL_HD + 0.4);
+  // 东西山墙（回廊以下那一段）
+  for (const sx of [-1, 1]) {
+    wanfoWall(18.8, 2.34, sx * (HALL_HW - 0.4), 2.37, 0, -sx * (Math.PI / 2));
+    // 回廊以上再铺一层：大乘之阁的万佛龛本来就不止一层
+    wanfoWall(18.8, 2.0, sx * (HALL_HW - 0.4), 4.92, 0, -sx * (Math.PI / 2));
+  }
+
+  // ————————————— 回廊：大乘之阁「内中空三层、四周设回廊」的简化
+  const GALLERY_Y = 3.78;
+  const GALLERY_W = 1.4;
+  {
+    const floors = new StaticBatch().shadow().receive();
+    const rails = new StaticBatch();
+    const cols = new StaticBatch().shadow();
+    const brackets = new StaticBatch();
+    const beamMat = caihuaMat(19);
+
+    for (const sx of [-1, 1]) {
+      const midX = sx * (HALL_HW - GALLERY_W / 2);
+      // 楼板 + 檐口梁
+      floors.add(
+        new THREE.BoxGeometry(GALLERY_W, 0.16, HALL_HD * 2 - 0.3),
+        matDarkWood,
+        midX,
+        GALLERY_Y - 0.08,
+        0,
+      );
+      floors.add(
+        new THREE.BoxGeometry(0.2, 0.24, HALL_HD * 2 - 0.3),
+        matVermilion,
+        sx * (HALL_HW - GALLERY_W - 0.02),
+        GALLERY_Y - 0.2,
+        0,
+      );
+
+      // 栏杆：望柱 + 金寻杖 + 金下枋
+      const railX = sx * (HALL_HW - GALLERY_W - 0.04);
+      for (let z = -9.15; z <= 9.16; z += 1.55) {
+        rails.add(new THREE.BoxGeometry(0.09, 0.94, 0.09), matVermilion, railX, GALLERY_Y + 0.47, z);
+      }
+      rails.add(new THREE.BoxGeometry(0.13, 0.1, HALL_HD * 2 - 0.4), matGold, railX, GALLERY_Y + 0.94, 0);
+      rails.add(new THREE.BoxGeometry(0.08, 0.08, HALL_HD * 2 - 0.4), matGold, railX, GALLERY_Y + 0.5, 0);
+
+      // 楼板下的彩画檐枋 + 一排小斗拱，抬头才看得出这层是“楼”
+      floors.add(
+        new THREE.BoxGeometry(0.1, 0.24, HALL_HD * 2 - 0.3),
+        beamMat,
+        sx * (HALL_HW - GALLERY_W - 0.06),
+        GALLERY_Y - 0.3,
+        0,
+      );
+      for (let z = -8.5; z <= 8.6; z += 1.7) {
+        brackets.add(new THREE.BoxGeometry(0.42, 0.12, 0.24), matVermilion, sx * (HALL_HW - GALLERY_W - 0.2), GALLERY_Y - 0.44, z);
+        brackets.add(new THREE.BoxGeometry(0.22, 0.12, 0.42), matGold, sx * (HALL_HW - GALLERY_W - 0.2), GALLERY_Y - 0.55, z);
+      }
+
+      // 回廊柱 + 斗拱 + 额枋
+      const colX = sx * (HALL_HW - 1.55);
+      const beamY = CEIL - 0.5;
+      for (const z of [-6.6, -2.2, 2.2, 6.6]) {
+        const ch = beamY - 0.15 - GALLERY_Y;
+        cols.add(new THREE.CylinderGeometry(0.16, 0.18, ch, 12), matVermilion, colX, GALLERY_Y + ch / 2, z);
+        rails.add(new THREE.TorusGeometry(0.2, 0.03, 6, 16), matGold, colX, GALLERY_Y + 0.06, z, Math.PI / 2, 0, 0);
+        brackets.add(new THREE.BoxGeometry(0.62, 0.14, 0.34), matVermilion, colX, beamY - 0.16, z);
+        brackets.add(new THREE.BoxGeometry(0.34, 0.14, 0.62), matDarkWood, colX, beamY - 0.3, z);
+        brackets.add(new THREE.BoxGeometry(0.2, 0.1, 0.2), matGold, colX, beamY - 0.42, z);
+      }
+      // 柱间的补间斗拱
+      for (const z of [-8.4, -4.4, 0, 4.4, 8.4]) {
+        brackets.add(new THREE.BoxGeometry(0.5, 0.12, 0.3), matVermilion, colX, beamY - 0.18, z);
+        brackets.add(new THREE.BoxGeometry(0.26, 0.12, 0.5), matDarkWood, colX, beamY - 0.3, z);
+      }
+      floors.add(new THREE.BoxGeometry(0.26, 0.3, 19.0), beamMat, colX, beamY, 0);
+    }
+    floors.build(group);
+    rails.build(group);
+    cols.build(group);
+    brackets.build(group);
+  }
+
+  // 回廊柱上的楹联
+  for (const [text, sx] of [
+    ['千手千眼觀自在', -1],
+    ['大慈大悲度眾生', 1],
+  ] as Array<[string, number]>) {
+    const tex = coupletTexture(text);
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.72,
+      emissive: 0xffe0b0,
+      emissiveMap: tex,
+      emissiveIntensity: 0.14,
+      side: THREE.DoubleSide,
+    });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 1.95), mat);
+    m.position.set(sx * (HALL_HW - 1.73), GALLERY_Y + 1.14, 6.6);
+    m.rotation.y = -sx * (Math.PI / 2);
+    group.add(m);
+  }
 
   // 壁灯：只有自发光 + 光晕，不加真实点光源，省手机的性能
   const wallLanternMat = new THREE.MeshStandardMaterial({
@@ -779,9 +1054,9 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     emissiveIntensity: 1.4,
   });
   for (const sx of [-1, 1]) {
-    for (const z of [-2.8, 2.8]) {
+    for (const z of [-6.8, -2.8, 2.8, 6.8]) {
       const g = new THREE.Group();
-      g.position.set(sx * (HALL_HW - 0.78), 3.45, z);
+      g.position.set(sx * (HALL_HW - 0.78), 2.95, z);
 
       const body = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.26, 0.5, 10),
@@ -830,7 +1105,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   // 中央门洞：宽 12.4，正好对齐殿前的石板路；引檐柱立在两旁
   const DOOR_HW = 6.2;
-  const FACE_OUT = 13.5;
+  const FACE_OUT = HALL_HW + 1.5;
 
   for (const sx of [-1, 1]) {
     const w = FACE_OUT - DOOR_HW;
@@ -855,7 +1130,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       map: (() => {
         const t = latticeTex.clone();
         t.needsUpdate = true;
-        t.repeat.set(4, 1);
+        t.repeat.set(Math.max(4, Math.round((w - 1.5) / 2.6)), 1);
         return t;
       })(),
       roughness: 0.72,
@@ -876,21 +1151,56 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     }
   }
 
-  // 檐柱：朱红圆柱 + 石础，立在月台边沿
-  for (const sx of [-1, 1]) {
-    for (const px of [DOOR_HW + 0.35, 12.6]) {
-      const x = sx * px;
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.4, FACE_H, 14), matVermilion);
-      col.position.set(x, FACE_H / 2, PORCH_Z);
-      col.castShadow = true;
-      group.add(col);
-
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.6, 0.34, 16), matStoneLight);
-      base.position.set(x, 0.17, PORCH_Z);
-      group.add(base);
-
-      obstacles.push({ x, z: PORCH_Z, r: 0.7 });
+  // 立面上的朱红壁柱：把一整排格扇分成几间，免得 48m 的正面像一块大窗墙
+  {
+    const pilasters = new StaticBatch().shadow();
+    for (const sx of [-1, 1]) {
+      for (const px of [13.2, 19.6]) {
+        pilasters.add(
+          new THREE.BoxGeometry(0.42, 4.9, 0.34),
+          matVermilion,
+          sx * px,
+          2.45,
+          FACE_Z + 0.38,
+        );
+        pilasters.add(
+          new THREE.BoxGeometry(0.7, 0.5, 0.42),
+          matGold,
+          sx * px,
+          0.25,
+          FACE_Z + 0.38,
+        );
+      }
     }
+    pilasters.build(group);
+  }
+
+  // 檐柱：朱红圆柱 + 石础，立在月台边沿
+  {
+    const porchCols = new StaticBatch();
+    const porchBases = new StaticBatch();
+    for (const sx of [-1, 1]) {
+      for (const px of [DOOR_HW + 0.35, 13.2, 19.6, 25.0]) {
+        const x = sx * px;
+        porchCols.add(
+          new THREE.CylinderGeometry(0.36, 0.4, FACE_H, 14),
+          matVermilion,
+          x,
+          FACE_H / 2,
+          PORCH_Z,
+        );
+        porchBases.add(
+          new THREE.CylinderGeometry(0.52, 0.6, 0.34, 16),
+          matStoneLight,
+          x,
+          0.17,
+          PORCH_Z,
+        );
+        obstacles.push({ x, z: PORCH_Z, r: 0.7 });
+      }
+    }
+    porchCols.shadow().build(group);
+    porchBases.build(group);
   }
 
   // 额枋：横跨整个正立面，同时兼作门洞上的门楣（参考图里这一条是彩画最醒目的地方）
@@ -902,214 +1212,679 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   // 门洞上方不再挂匾额：只留一条彩画门楣，视线直接进殿
 
   // 白石栏杆：月台前沿（门洞两侧）一排望柱 + 寻杖
-  for (const sx of [-1, 1]) {
-    const x0 = sx * 10.4;
-    const x1 = sx * 13.3;
-    const back = 0.2;
-    const railZ = STEP_Z0 - 0.2;
+  {
+    const railing = new StaticBatch().shadow().receive();
+    for (const sx of [-1, 1]) {
+      const x0 = sx * 12.4;
+      const x1 = sx * (FACE_OUT - 1.2);
+      const back = 0.2;
+      const railZ = STEP_Z0 - 0.2;
+      const len = Math.abs(x1 - x0);
 
-    const n = 3;
-    for (let i = 0; i <= n; i++) {
-      const x = x0 + ((x1 - x0) * i) / n;
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, 1.02, 0.26), matStoneLight);
-      post.position.set(x, 0.51, railZ);
-      post.castShadow = true;
-      group.add(post);
+      const n = 6;
+      for (let i = 0; i <= n; i++) {
+        const x = x0 + ((x1 - x0) * i) / n;
+        railing.add(
+          new THREE.BoxGeometry(0.26, 1.02, 0.26),
+          matStoneLight,
+          x,
+          0.51,
+          railZ,
+        );
+        railing.add(
+          new THREE.SphereGeometry(0.15, 10, 8),
+          matStoneLight,
+          x,
+          1.08,
+          railZ,
+        );
+      }
 
-      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), matStoneLight);
-      knob.position.set(x, 1.08, railZ);
-      group.add(knob);
+      railing.add(
+        new THREE.BoxGeometry(len - 0.1, 0.16, 0.2),
+        matStoneLight,
+        (x0 + x1) / 2,
+        0.78,
+        railZ,
+      );
+      railing.add(
+        new THREE.BoxGeometry(len - 0.1, 0.14, 0.26),
+        matStoneLight,
+        (x0 + x1) / 2,
+        0.2 + back,
+        railZ,
+      );
     }
-
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) - 0.1, 0.16, 0.2), matStoneLight);
-    rail.position.set((x0 + x1) / 2, 0.78, railZ);
-    group.add(rail);
-
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) - 0.1, 0.14, 0.26), matStoneLight);
-    foot.position.set((x0 + x1) / 2, 0.2 + back, railZ);
-    group.add(foot);
+    railing.build(group);
   }
 
   // ————————————— 柱子
 
-  // 只留两侧的两排檐柱（x = ±9.5）。
-  // 原来还有一对 [-4.2, -8] / [4.2, -8] 的内柱，正好立在佛坛前沿、
-  // 夹在中间主尊与两侧侧尊之间，从殿内正面看会直接切在佛像上，故去掉。
+  // 只留两侧的两排檐柱（x = ±21.5）。
+  // 原来还有一对 [-4.2, -8] / [4.2, -8] 的内柱，正好立在佛坛前沿，
+  // 从殿内正面看会直接切在千手观音身上，故去掉。
   const pillarPositions: Array<[number, number]> = [
-    [-9.5, -8],
-    [9.5, -8],
-    [-9.5, -1],
-    [9.5, -1],
-    [-9.5, 5.5],
-    [9.5, 5.5],
+    [-21.5, -8],
+    [21.5, -8],
+    [-21.5, -1],
+    [21.5, -1],
+    [-21.5, 5.5],
+    [21.5, 5.5],
   ];
-  for (const [x, z] of pillarPositions) {
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.37, CEIL, 14), matVermilion);
-    col.position.set(x, CEIL / 2, z);
-    col.castShadow = true;
-    col.receiveShadow = true;
-    group.add(col);
-
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.56, 0.3, 16), matStoneSolid);
-    base.position.set(x, 0.15, z);
-    base.receiveShadow = true;
-    group.add(base);
-
-    obstacles.push({ x, z, r: 0.75 });
+  {
+    const cols = new StaticBatch().shadow().receive();
+    const bases = new StaticBatch().receive();
+    for (const [x, z] of pillarPositions) {
+      cols.add(
+        new THREE.CylinderGeometry(0.33, 0.37, CEIL, 14),
+        matVermilion,
+        x,
+        CEIL / 2,
+        z,
+      );
+      bases.add(
+        new THREE.CylinderGeometry(0.5, 0.56, 0.3, 16),
+        matStoneSolid,
+        x,
+        0.15,
+        z,
+      );
+      obstacles.push({ x, z, r: 0.75 });
+    }
+    cols.build(group);
+    bases.build(group);
   }
 
   // ————————————— 佛坛
 
   const altarZ = -8.1;
   const steps: Array<[number, number, number]> = [
-    [16.0, 0.34, 4.4],
-    [14.8, 0.32, 3.9],
-    [14.0, 0.32, 3.4],
+    [22.0, 0.34, 4.4],
+    [20.6, 0.32, 4.15],
+    [19.2, 0.32, 4.0],
   ];
   let ay = 0;
-  steps.forEach(([w, h, d], i) => {
-    const s = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matStoneSolid);
-    s.position.set(0, ay + h / 2, altarZ);
-    s.castShadow = true;
-    s.receiveShadow = true;
-    group.add(s);
-    ay += h;
-    if (i === steps.length - 1) {
-      const top = new THREE.Mesh(new THREE.BoxGeometry(w - 0.4, 0.1, d - 0.4), matBronzeLit);
-      top.position.set(0, ay + 0.05, altarZ);
-      group.add(top);
-    }
-  });
+  {
+    const altarSteps = new StaticBatch().shadow().receive();
+    const altarTops = new StaticBatch();
+    steps.forEach(([w, h, d], i) => {
+      altarSteps.add(
+        new THREE.BoxGeometry(w, h, d),
+        matStoneSolid,
+        0,
+        ay + h / 2,
+        altarZ,
+      );
+      ay += h;
+      if (i === steps.length - 1) {
+        altarTops.add(
+          new THREE.BoxGeometry(w - 0.4, 0.1, d - 0.4),
+          matBronzeLit,
+          0,
+          ay + 0.05,
+          altarZ,
+        );
+      }
+    });
+    altarSteps.build(group);
+    altarTops.build(group);
+  }
   const altarTop = ay + 0.1;
 
-  const bronzeDark = new THREE.MeshStandardMaterial({
-    color: 0x6b5942,
-    roughness: 0.52,
-    metalness: 0.62,
-  });
-
-  /** 火焰光背的材质：昼夜切换时和头光一起调透明度 */
+  /** 背光 / 头光材质：昼夜切换时统一调透明度 */
   const mandorlaMats: THREE.MeshBasicMaterial[] = [];
 
-  /**
-   * 一尊坐佛：莲座 + 结跏趺坐 + 禅定印 + 火焰光背。
-   *
-   * 本地坐标以莲座底面为原点，所以只要给一个 scale 就能配出
-   * 「中间主尊 + 两侧略小的三世佛」。
-   */
-  function makeBuddha(px: number, s: number, big: boolean) {
+  // ————————————— 千手千眼观世音（仿承德普宁寺大乘之阁）
+  //
+  // 大乘之阁里是一尊 22m 的金漆木雕立像：须弥座 + 莲台，42 臂
+  // （两臂合掌当胸，其余 40 臂各持法器、掌心各一眼），冠中坐一尊
+  // 无量光佛，两侧立善财、龙女。这里把整尊像压进 6.4m 的殿高里，
+  // 从莲台一直顶到天花，抬头就是满壁的手眼。
+
+  const matGilded = new THREE.MeshStandardMaterial({
+    color: 0xb07a3c,
+    roughness: 0.44,
+    metalness: 0.42,
+    emissive: 0x1b0f05,
+  });
+  const matGildedBright = new THREE.MeshStandardMaterial({
+    color: 0xdcb063,
+    roughness: 0.26,
+    metalness: 0.8,
+    emissive: 0x2a1a06,
+  });
+  const matRobeRed = new THREE.MeshStandardMaterial({
+    map: robeTexture(),
+    roughness: 0.55,
+    metalness: 0.14,
+  });
+  const matFaceDark = new THREE.MeshStandardMaterial({
+    color: 0x2a1408,
+    roughness: 0.5,
+    metalness: 0.1,
+  });
+  const matPalmEye = new THREE.MeshStandardMaterial({
+    color: 0x5a3413,
+    emissive: 0xffd79a,
+    emissiveIntensity: 1.1,
+    roughness: 0.4,
+  });
+
+  /** 在两点之间放一根胶囊（手臂的上下臂） */
+  const limbUp = new THREE.Vector3(0, 1, 0);
+  const limbFrom = new THREE.Vector3();
+  const limbTo = new THREE.Vector3();
+  const limbDir = new THREE.Vector3();
+  const limbQuat = new THREE.Quaternion();
+  const limbEuler = new THREE.Euler();
+  function limb(
+    batch: StaticBatch,
+    mat: THREE.Material,
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+    r: number,
+  ) {
+    limbFrom.set(ax, ay, az);
+    limbTo.set(bx, by, bz);
+    limbDir.subVectors(limbTo, limbFrom);
+    const len = limbDir.length();
+    if (len < 1e-4) return;
+    limbQuat.setFromUnitVectors(limbUp, limbDir.normalize());
+    limbEuler.setFromQuaternion(limbQuat);
+    batch.add(
+      new THREE.CapsuleGeometry(r, Math.max(0.02, len - r * 1.4), 4, 8),
+      mat,
+      (ax + bx) / 2,
+      (ay + by) / 2,
+      (az + bz) / 2,
+      limbEuler.x,
+      limbEuler.y,
+      limbEuler.z,
+    );
+  }
+
+  /** 40 只手里的法器：八种轮流，垂在掌下 */
+  function addImplement(
+    batch: StaticBatch,
+    idx: number,
+    hx: number,
+    hy: number,
+    hz: number,
+  ) {
+    const px = hx;
+    const py = hy - 0.2;
+    const pz = hz + 0.07;
+    switch (idx % 8) {
+      case 0: // 金刚杵
+        batch.add(new THREE.CylinderGeometry(0.026, 0.026, 0.26, 6), matGildedBright, px, py, pz);
+        batch.add(new THREE.SphereGeometry(0.05, 6, 6), matGildedBright, px, py + 0.15, pz);
+        batch.add(new THREE.SphereGeometry(0.05, 6, 6), matGildedBright, px, py - 0.15, pz);
+        break;
+      case 1: // 宝瓶
+        batch.add(new THREE.SphereGeometry(0.075, 8, 6), matGildedBright, px, py, pz, 0, 0, 0, 1, 1.2, 1);
+        batch.add(new THREE.CylinderGeometry(0.026, 0.045, 0.11, 8), matGildedBright, px, py + 0.13, pz);
+        break;
+      case 2: // 莲花
+        for (let p = 0; p < 6; p++) {
+          const a = (p / 6) * Math.PI * 2;
+          batch.add(
+            new THREE.SphereGeometry(0.045, 6, 5),
+            matGildedBright,
+            px + Math.cos(a) * 0.05,
+            py,
+            pz + Math.sin(a) * 0.05,
+            0,
+            0,
+            0,
+            1,
+            1.9,
+            0.5,
+          );
+        }
+        break;
+      case 3: // 法轮
+        batch.add(new THREE.TorusGeometry(0.11, 0.022, 6, 16), matGildedBright, px, py, pz);
+        for (let s = 0; s < 4; s++) {
+          batch.add(
+            new THREE.BoxGeometry(0.02, 0.2, 0.02),
+            matGildedBright,
+            px,
+            py,
+            pz,
+            0,
+            0,
+            (s / 4) * Math.PI,
+          );
+        }
+        break;
+      case 4: // 宝珠
+        batch.add(new THREE.SphereGeometry(0.08, 8, 6), matGildedBright, px, py, pz);
+        break;
+      case 5: // 弓
+        batch.add(
+          new THREE.TorusGeometry(0.15, 0.017, 5, 12, Math.PI * 1.1),
+          matGildedBright,
+          px,
+          py,
+          pz,
+          0,
+          0,
+          Math.PI * 0.5,
+        );
+        break;
+      case 6: // 宝镜
+        batch.add(
+          new THREE.CylinderGeometry(0.1, 0.1, 0.02, 16),
+          matGildedBright,
+          px,
+          py,
+          pz,
+          Math.PI / 2,
+          0,
+          0,
+        );
+        break;
+      default: // 数珠
+        batch.add(new THREE.TorusGeometry(0.09, 0.024, 6, 16), matGildedBright, px, py, pz);
+        break;
+    }
+  }
+
+  /** 主尊：一尊立像观音，本地 y=0 在莲台底，总高约 4.8m */
+  function makeGuanyin() {
     const g = new THREE.Group();
-    g.position.set(px, altarTop, altarZ);
-    g.scale.setScalar(s);
+    g.position.set(0, altarTop, altarZ);
+    g.scale.setScalar(1.04);
 
-    const at = (m: THREE.Mesh, y = 0, z = 0) => {
-      m.position.set(0, y, z);
-      m.castShadow = true;
-      g.add(m);
-      return m;
-    };
+    const gold = new StaticBatch().shadow();
+    const body = new StaticBatch().shadow();
+    const robe = new StaticBatch().shadow();
+    const eyes = new StaticBatch();
 
-    // 莲座
-    at(new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.35, 0.42, 24), matBronzeLit), 0.21);
-    const petals = big ? 16 : 12;
-    for (let i = 0; i < petals; i++) {
-      const a = (i / petals) * Math.PI * 2;
-      const petal = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), matBronzeLit);
-      petal.scale.set(1, 0.42, 1.5);
-      petal.position.set(Math.cos(a) * 2.0, 0.34, Math.sin(a) * 2.0);
-      petal.rotation.y = -a;
-      g.add(petal);
+    // —— 须弥座 + 双层莲台
+    gold.add(new THREE.CylinderGeometry(1.94, 2.02, 0.14, 30), matGildedBright, 0, 0.07, 0);
+    robe.add(new THREE.CylinderGeometry(1.82, 1.9, 0.2, 30), matRobeRed, 0, 0.24, 0);
+    gold.add(new THREE.CylinderGeometry(1.86, 1.92, 0.06, 30), matGildedBright, 0, 0.37, 0);
+    const PETALS = 20;
+    for (let ring = 0; ring < 2; ring++) {
+      const rr = 1.5 - ring * 0.14;
+      const yy = 0.47 + ring * 0.07;
+      for (let i = 0; i < PETALS; i++) {
+        const a = (i / PETALS) * Math.PI * 2 + ring * (Math.PI / PETALS);
+        gold.add(
+          new THREE.SphereGeometry(0.17, 8, 6),
+          matGildedBright,
+          Math.cos(a) * rr,
+          yy,
+          Math.sin(a) * rr,
+          0,
+          -a,
+          0,
+          1.2,
+          1.05,
+          0.42,
+        );
+      }
     }
+    gold.add(new THREE.CylinderGeometry(1.3, 1.4, 0.08, 30), matGildedBright, 0, 0.62, 0);
 
-    // 结跏趺坐的下半身
-    const legs = at(new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), bronzeDark), 0.62);
-    legs.scale.set(1.92, 0.62, 1.35);
-
-    at(new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.72, 0.42, 26), bronzeDark), 0.9);
-
-    // 躯干
-    const torsoProfile: THREE.Vector2[] = [
-      new THREE.Vector2(1.16, 0),
-      new THREE.Vector2(1.1, 0.25),
-      new THREE.Vector2(0.96, 0.55),
-      new THREE.Vector2(0.82, 0.85),
-      new THREE.Vector2(0.76, 1.12),
-      new THREE.Vector2(0.78, 1.35),
-      new THREE.Vector2(0.7, 1.5),
+    // —— 红袍：从莲台垂到腰，下摆一圈金边
+    const skirt: THREE.Vector2[] = [
+      new THREE.Vector2(1.2, 0.66),
+      new THREE.Vector2(1.15, 0.96),
+      new THREE.Vector2(1.06, 1.36),
+      new THREE.Vector2(0.98, 1.8),
+      new THREE.Vector2(0.9, 2.16),
+      new THREE.Vector2(0.85, 2.42),
+      new THREE.Vector2(0.81, 2.58),
     ];
-    at(new THREE.Mesh(new THREE.LatheGeometry(torsoProfile, 26), bronzeDark), 1.0);
-
-    const shoulders = at(new THREE.Mesh(new THREE.SphereGeometry(0.82, 20, 14), bronzeDark), 2.38);
-    shoulders.scale.set(1.5, 0.5, 0.86);
-
-    // 双臂 + 禅定印（双手叠放腹前）
+    robe.add(new THREE.LatheGeometry(skirt, 30), matRobeRed, 0, 0, 0);
+    gold.add(new THREE.TorusGeometry(1.21, 0.045, 8, 40), matGildedBright, 0, 0.68, 0, Math.PI / 2, 0, 0);
+    gold.add(new THREE.TorusGeometry(0.83, 0.06, 8, 32), matGildedBright, 0, 2.53, 0, Math.PI / 2, 0, 0);
+    // 腰带垂下的两条飘带
     for (const sx of [-1, 1]) {
-      const arm = at(new THREE.Mesh(new THREE.CapsuleGeometry(0.23, 1.0, 4, 10), bronzeDark), 1.72, 0.08);
-      arm.position.x = sx * 1.0;
-      arm.rotation.z = sx * 0.1;
-      arm.rotation.x = 0.16;
-
-      const hand = at(new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 10), bronzeDark), 0.98, 0.66);
-      hand.position.x = sx * 0.42;
-      hand.scale.set(1.35, 0.6, 1);
+      robe.add(
+        new THREE.BoxGeometry(0.16, 1.5, 0.05),
+        matRobeRed,
+        sx * 0.26,
+        1.78,
+        0.9,
+        0,
+        0,
+        sx * 0.03,
+      );
     }
 
-    const drape = at(new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.26, 10, 24, Math.PI), bronzeDark), 0.96, 0.3);
-    drape.rotation.set(-Math.PI / 2, 0, 0);
+    // 裙子的垂褶：几道顺着裙摆的凸棱
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + 0.13;
+      limb(
+        robe,
+        matRobeRed,
+        Math.cos(a) * 0.82,
+        2.52,
+        Math.sin(a) * 0.82,
+        Math.cos(a) * 1.2,
+        0.68,
+        Math.sin(a) * 1.2,
+        0.045,
+      );
+    }
 
-    at(new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.26, 14), bronzeDark), 2.6);
+    // —— 上身：金漆
+    const torso: THREE.Vector2[] = [
+      new THREE.Vector2(0.82, 2.5),
+      new THREE.Vector2(0.88, 2.75),
+      new THREE.Vector2(0.92, 3.0),
+      new THREE.Vector2(0.86, 3.22),
+      new THREE.Vector2(0.7, 3.4),
+      new THREE.Vector2(0.46, 3.52),
+    ];
+    body.add(new THREE.LatheGeometry(torso, 28), matGilded, 0, 0, 0);
+    body.add(new THREE.SphereGeometry(0.5, 20, 14), matGilded, 0, 3.3, 0, 0, 0, 0, 1.78, 0.46, 0.9);
+    body.add(new THREE.CylinderGeometry(0.2, 0.27, 0.26, 14), matGilded, 0, 3.58, 0);
 
-    const head = at(new THREE.Mesh(new THREE.SphereGeometry(0.4, 22, 18), bronzeDark), 3.0);
-    head.scale.set(0.92, 1.06, 0.94);
-
-    const ushnisha = at(new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), bronzeDark), 3.38);
-    ushnisha.scale.set(1, 0.85, 1);
-
+    // —— 头面
+    body.add(new THREE.SphereGeometry(0.44, 24, 20), matGilded, 0, 3.96, 0, 0, 0, 0, 0.94, 1.1, 0.92);
     for (const sx of [-1, 1]) {
-      const ear = at(new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), bronzeDark), 2.98);
-      ear.position.x = sx * 0.38;
-      ear.scale.set(0.55, 1.5, 0.7);
+      body.add(new THREE.SphereGeometry(0.1, 8, 8), matGilded, sx * 0.42, 3.95, 0, 0, 0, 0, 0.55, 1.5, 0.7);
+      // 眼、眉
+      body.add(
+        new THREE.SphereGeometry(0.09, 8, 6),
+        matFaceDark,
+        sx * 0.15,
+        4.0,
+        0.4,
+        0,
+        0,
+        sx * 0.05,
+        0.82,
+        0.16,
+        0.2,
+      );
+      body.add(
+        new THREE.TorusGeometry(0.09, 0.016, 5, 10, Math.PI * 0.8),
+        matFaceDark,
+        sx * 0.15,
+        4.055,
+        0.4,
+        0,
+        0,
+        Math.PI * 0.1,
+      );
+    }
+    // 鼻、口、白毫（额中第三目）
+    body.add(new THREE.SphereGeometry(0.06, 8, 6), matGilded, 0, 3.93, 0.43, 0, 0, 0, 0.8, 1.7, 0.9);
+    body.add(new THREE.BoxGeometry(0.07, 0.012, 0.02), matFaceDark, 0, 3.885, 0.45);
+    body.add(
+      new THREE.TorusGeometry(0.075, 0.013, 5, 12, Math.PI * 0.55),
+      matFaceDark,
+      0,
+      3.815,
+      0.43,
+      0,
+      0,
+      Math.PI + Math.PI * 0.25,
+    );
+    body.add(new THREE.SphereGeometry(0.042, 8, 6), matGildedBright, 0, 4.06, 0.41, 0, 0, 0, 0.65, 1.1, 0.5);
+    body.add(new THREE.SphereGeometry(0.022, 6, 6), matFaceDark, 0, 4.06, 0.44);
+
+    // 发髻 + 宝冠（冠圈、五峰、冠中化佛）
+    body.add(
+      new THREE.SphereGeometry(0.43, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.4),
+      matFaceDark,
+      0,
+      3.99,
+      0,
+      0,
+      0,
+      0,
+      1.0,
+      1.02,
+      0.98,
+    );
+    gold.add(new THREE.CylinderGeometry(0.45, 0.47, 0.2, 20), matGildedBright, 0, 4.2, 0);
+    for (let i = 0; i < 5; i++) {
+      const a = (i - 2) * 0.46;
+      gold.add(
+        new THREE.ConeGeometry(0.1, 0.34 - Math.abs(i - 2) * 0.05, 6),
+        matGildedBright,
+        Math.sin(a) * 0.38,
+        4.5,
+        Math.cos(a) * 0.38,
+        Math.cos(a) * 0.22,
+        -a,
+        -Math.sin(a) * 0.22,
+      );
+    }
+    // 冠中化佛：无量光佛
+    gold.add(new THREE.ConeGeometry(0.1, 0.2, 8), matGildedBright, 0, 4.6, 0.24);
+    gold.add(new THREE.SphereGeometry(0.065, 8, 6), matGildedBright, 0, 4.75, 0.24);
+    gold.add(new THREE.TorusGeometry(0.095, 0.014, 5, 14), matGildedBright, 0, 4.75, 0.2);
+
+    // —— 项饰、璎珞
+    gold.add(
+      new THREE.TorusGeometry(0.66, 0.04, 8, 30),
+      matGildedBright,
+      0,
+      3.4,
+      0.02,
+      Math.PI / 2 - 0.22,
+      0,
+      0,
+    );
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      gold.add(
+        new THREE.SphereGeometry(0.055, 6, 5),
+        matGildedBright,
+        Math.cos(a) * 0.68,
+        3.37,
+        Math.sin(a) * 0.6 + 0.02,
+      );
+    }
+    for (let i = 0; i < 6; i++) {
+      gold.add(
+        new THREE.SphereGeometry(0.045, 6, 5),
+        matGildedBright,
+        0,
+        3.16 - i * 0.12,
+        0.9 - i * 0.005,
+      );
+    }
+    gold.add(new THREE.SphereGeometry(0.085, 8, 6), matGildedBright, 0, 2.46, 0.86, 0, 0, 0, 1, 1.4, 1);
+    gold.add(new THREE.ConeGeometry(0.055, 0.16, 8), matGildedBright, 0, 2.28, 0.86);
+
+    // —— 42 臂
+    const SHOULDER_Y = 3.28;
+    // 主臂：合掌当胸
+    for (const sx of [-1, 1]) {
+      limb(body, matGilded, sx * 0.64, SHOULDER_Y, 0.02, sx * 0.48, 2.98, 0.4, 0.13);
+      limb(body, matGilded, sx * 0.48, 2.98, 0.4, sx * 0.13, 3.34, 0.66, 0.105);
+      body.add(
+        new THREE.SphereGeometry(0.12, 10, 8),
+        matGilded,
+        sx * 0.12,
+        3.36,
+        0.68,
+        0,
+        0,
+        0,
+        0.85,
+        1.4,
+        0.55,
+      );
+      eyes.add(new THREE.SphereGeometry(0.026, 6, 6), matPalmEye, sx * 0.12, 3.36, 0.75);
+      gold.add(
+        new THREE.TorusGeometry(0.1, 0.028, 6, 14),
+        matGildedBright,
+        sx * 0.13,
+        3.24,
+        0.64,
+        Math.PI / 2,
+        0,
+        0,
+      );
     }
 
-    // 火焰光背：一片尖顶叶形，两层叠加出焰心
-    const flame = new THREE.Shape();
-    flame.moveTo(0, 0.1);
-    flame.bezierCurveTo(1.8, 0.85, 1.9, 3.2, 0.64, 4.4);
-    flame.quadraticCurveTo(0.24, 5.05, 0, 5.75);
-    flame.quadraticCurveTo(-0.24, 5.05, -0.64, 4.4);
-    flame.bezierCurveTo(-1.9, 3.2, -1.8, 0.85, 0, 0.1);
+    // 侧臂：每侧 20 只，两圈错开，向上张开如扇
+    const rings: Array<{ n: number; r: number; a0: number; a1: number; z: number }> = [
+      { n: 10, r: 1.42, a0: -0.55, a1: 1.5, z: -0.12 },
+      { n: 10, r: 1.66, a0: -0.3, a1: 1.3, z: -0.5 },
+    ];
+    let armIndex = 0;
+    for (const sx of [-1, 1]) {
+      for (const def of rings) {
+        for (let i = 0; i < def.n; i++) {
+          const k = def.n === 1 ? 0 : i / (def.n - 1);
+          const a = def.a0 + (def.a1 - def.a0) * k;
+          const R = def.r * (0.94 + 0.1 * Math.sin(k * Math.PI));
+          const hx = sx * Math.cos(a) * R;
+          const hy = SHOULDER_Y + Math.sin(a) * R - 0.12;
+          const hz = def.z;
+          const ex = sx * Math.cos(a) * R * 0.46;
+          const ey = SHOULDER_Y + Math.sin(a) * R * 0.48 - 0.3;
+          const ez = def.z * 0.45 + 0.1;
 
-    for (const [k, op] of [
-      [1, 0.15],
-      [0.74, 0.13],
-    ] as Array<[number, number]>) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xffc172,
-        transparent: true,
-        opacity: op,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
-      mat.userData.base = op;
-      mandorlaMats.push(mat);
-
-      const geo = new THREE.ShapeGeometry(flame, 20);
-      geo.scale(k, k, 1);
-      const layer = new THREE.Mesh(geo, mat);
-      // 缩小的一层要抬回去，保持同心
-      layer.position.set(0, 0.05 + (1 - k) * 2.9, -1.15);
-      g.add(layer);
+          limb(body, matGilded, sx * 0.6, SHOULDER_Y, -0.02, ex, ey, ez, 0.105);
+          limb(body, matGilded, ex, ey, ez, hx, hy, hz, 0.085);
+          body.add(
+            new THREE.SphereGeometry(0.1, 8, 6),
+            matGilded,
+            hx,
+            hy,
+            hz,
+            0,
+            sx * (0.16 - a * 0.1),
+            0,
+            0.95,
+            1.3,
+            0.5,
+          );
+          eyes.add(new THREE.SphereGeometry(0.024, 6, 6), matPalmEye, hx, hy, hz + 0.06);
+          addImplement(gold, armIndex, hx, hy, hz);
+          armIndex++;
+        }
+      }
     }
 
+    gold.build(g);
+    body.build(g);
+    robe.build(g);
+    eyes.build(g);
     group.add(g);
     return g;
   }
 
-  // 三世佛：中间释迦牟尼，两侧略小（药师 / 阿弥陀）
-  makeBuddha(0, 1, true);
-  makeBuddha(-5.1, 0.7, false);
-  makeBuddha(5.1, 0.7, false);
+  /** 善财、龙女：站在佛前莲台上的两个小侍者 */
+  function makeAttendant(px: number, girl: boolean) {
+    const g = new THREE.Group();
+    g.position.set(px, altarTop, altarZ + 1.45);
+    g.rotation.y = px < 0 ? 0.3 : -0.3;
+
+    const gold = new StaticBatch().shadow();
+    const cloth = new StaticBatch().shadow();
+    const dark = new StaticBatch();
+
+    // 小莲座
+    gold.add(new THREE.CylinderGeometry(0.3, 0.36, 0.09, 16), matGildedBright, 0, 0.045, 0);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      gold.add(
+        new THREE.SphereGeometry(0.08, 6, 5),
+        matGildedBright,
+        Math.cos(a) * 0.3,
+        0.13,
+        Math.sin(a) * 0.3,
+        0,
+        -a,
+        0,
+        1.1,
+        1.0,
+        0.45,
+      );
+    }
+
+    // 身体：上宽下窄的小袍子
+    const prof: THREE.Vector2[] = [
+      new THREE.Vector2(0.32, 0.16),
+      new THREE.Vector2(0.3, 0.5),
+      new THREE.Vector2(0.26, 0.82),
+      new THREE.Vector2(0.24, 0.98),
+      new THREE.Vector2(0.19, 1.08),
+    ];
+    cloth.add(new THREE.LatheGeometry(prof, 18), girl ? matRobeRed : matGilded, 0, 0, 0);
+    gold.add(new THREE.TorusGeometry(0.235, 0.025, 6, 18), matGildedBright, 0, 0.98, 0, Math.PI / 2, 0, 0);
+
+    // 肩
+    gold.add(new THREE.SphereGeometry(0.2, 12, 10), matGilded, 0, 1.08, 0, 0, 0, 0, 1.45, 0.6, 0.85);
+
+    // 合掌的双臂
+    for (const sx of [-1, 1]) {
+      limb(gold, matGilded, sx * 0.24, 1.06, 0.02, sx * 0.1, 0.86, 0.17, 0.05);
+      limb(gold, matGilded, sx * 0.1, 0.86, 0.17, sx * 0.03, 0.98, 0.24, 0.042);
+    }
+    gold.add(new THREE.SphereGeometry(0.055, 8, 6), matGilded, 0, 1.0, 0.25, 0, 0, 0, 0.75, 1.2, 0.6);
+
+    // 头 + 发 + 冠
+    gold.add(new THREE.SphereGeometry(0.19, 14, 12), matGilded, 0, 1.28, 0, 0, 0, 0, 0.95, 1.05, 0.95);
+    dark.add(new THREE.SphereGeometry(0.185, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.42), matFaceDark, 0, 1.3, 0);
+    for (const sx of [-1, 1]) {
+      gold.add(
+        new THREE.SphereGeometry(0.04, 6, 6),
+        matGildedBright,
+        sx * 0.06,
+        1.3,
+        0.16,
+        0,
+        0,
+        0,
+        0.9,
+        1.2,
+        0.4,
+      );
+    }
+    gold.add(new THREE.TorusGeometry(0.195, 0.018, 5, 18), matGildedBright, 0, 1.42, 0, Math.PI / 2, 0, 0);
+    if (girl) {
+      // 龙女：双髻
+      for (const sx of [-1, 1]) {
+        gold.add(new THREE.SphereGeometry(0.055, 8, 6), matGildedBright, sx * 0.09, 1.45, 0);
+      }
+    } else {
+      // 善财：一个发髻
+      gold.add(new THREE.SphereGeometry(0.065, 8, 6), matGildedBright, 0, 1.47, 0);
+    }
+    // 头光
+    gold.add(new THREE.TorusGeometry(0.24, 0.014, 5, 20), matGildedBright, 0, 1.3, -0.14);
+
+    gold.build(g);
+    cloth.build(g);
+    dark.build(g);
+    group.add(g);
+    return g;
+  }
+
+  // ————————————— 千手背光 + 头光
+
+  // 千手如轮：一张画满手臂和掌心眼的透明贴图，贴在背屏前
+  const haloPlaneMat = new THREE.MeshBasicMaterial({
+    map: thousandHandHaloTexture(),
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  haloPlaneMat.userData.base = 1;
+  mandorlaMats.push(haloPlaneMat);
+  {
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(5.0, 4.9), haloPlaneMat);
+    plane.position.set(0, 3.85, -9.4);
+    group.add(plane);
+  }
 
   const haloMat = new THREE.MeshBasicMaterial({
     color: 0xffcf8a,
@@ -1117,9 +1892,23 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     opacity: 0.4,
     side: THREE.DoubleSide,
   });
-  const halo = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.1, 56), haloMat);
-  halo.position.set(0, altarTop + 2.5, altarZ - 1.0);
+  const halo = new THREE.Mesh(new THREE.RingGeometry(0.56, 0.64, 56), haloMat);
+  halo.position.set(0, altarTop + 4.15, -9.3);
   group.add(halo);
+
+  // 一枚大金环把满壁的手圈成“背光”
+  const aureoleMat = new THREE.MeshBasicMaterial({
+    color: 0xe8b464,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  aureoleMat.userData.base = 0.5;
+  mandorlaMats.push(aureoleMat);
+  const aureole = new THREE.Mesh(new THREE.TorusGeometry(2.42, 0.03, 6, 72), aureoleMat);
+  aureole.position.set(0, 3.95, -9.43);
+  group.add(aureole);
 
   const haloGlow = new THREE.Sprite(
     new THREE.SpriteMaterial({
@@ -1131,14 +1920,18 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       depthWrite: false,
     }),
   );
-  haloGlow.scale.set(7.2, 7.2, 1);
-  haloGlow.position.set(0, altarTop + 2.4, altarZ - 1.3);
+  haloGlow.scale.set(3.4, 3.4, 1);
+  haloGlow.position.set(0, altarTop + 4.15, -9.26);
   group.add(haloGlow);
 
-  const backGlow = new THREE.SpotLight(0xffb070, 26, 16, Math.PI * 0.34, 0.7, 1.6);
-  backGlow.position.set(0, altarTop + 3.4, altarZ + 0.4);
-  backGlow.target.position.set(0, altarTop + 2.0, altarZ - 2.2);
+  const backGlow = new THREE.SpotLight(0xffb070, 16, 20, Math.PI * 0.42, 0.85, 1.7);
+  backGlow.position.set(0, altarTop + 4.6, altarZ + 1.6);
+  backGlow.target.position.set(0, altarTop + 2.8, altarZ - 1.6);
   group.add(backGlow, backGlow.target);
+
+  makeGuanyin();
+  makeAttendant(-4.2, false);
+  makeAttendant(4.2, true);
 
   // ————————————— 殿内灯笼
 
@@ -1173,12 +1966,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       lg.add(cap);
     }
 
-    const pl = new THREE.PointLight(0xffa858, 14, 20, 1.8);
-    pl.position.y = -1.65;
-    pl.userData.baseFactor = 1.15;
-    lg.add(pl);
-    lanterns.push(pl);
-
+    // 这两盏不再加真实点光源：殿里已有长明灯 + 佛前三盏，
+    // 多一盏就多一份逐像素光照开销；靠灯笼自身的发光贴图已经够看
     const spr = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: glowTex,
@@ -1264,8 +2053,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   }
 
   // 坐席两侧：两盏高的长明灯，负责照亮人和蒲团
-  candleStand(-8.3, 0.6, 2.5, true);
-  candleStand(8.3, 0.6, 2.5, true);
+  candleStand(-12.9, 0.6, 2.5, true);
+  candleStand(12.9, 0.6, 2.5, true);
   // 佛前两支烛（只有火苗，不加真实光源，省着色器开销）
   candleStand(-7.0, -5.2, 1.6, false);
   candleStand(7.0, -5.2, 1.6, false);
@@ -1280,10 +2069,10 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const cushionTopMat = new THREE.MeshStandardMaterial({ color: 0x7d5940, roughness: 0.95 });
 
   const rows = [
-    { z: -3.2, xs: [-4.6, 0, 4.6] },
-    { z: -0.2, xs: [-4.6, 0, 4.6] },
-    { z: 2.8, xs: [-4.6, 0, 4.6] },
-    { z: 5.8, xs: [-4.6, 0, 4.6] },
+    { z: -3.2, xs: [-9.2, -4.6, 0, 4.6, 9.2] },
+    { z: -0.2, xs: [-9.2, -4.6, 0, 4.6, 9.2] },
+    { z: 2.8, xs: [-9.2, -4.6, 0, 4.6, 9.2] },
+    { z: 5.8, xs: [-9.2, -4.6, 0, 4.6, 9.2] },
   ];
   for (const row of rows) {
     for (const x of row.xs) {
@@ -1490,14 +2279,24 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     band.position.y = 1.22;
     fortuneStand.add(band);
 
-    for (let i = 0; i < 15; i++) {
-      const a = (i / 15) * Math.PI * 2;
-      const r = 0.03 + (i % 4) * 0.03;
-      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.46, 5), stickMat);
-      stick.position.set(Math.cos(a) * r, 1.63 + (i % 5) * 0.012, Math.sin(a) * r);
-      stick.rotation.z = (Math.random() - 0.5) * 0.12;
-      stick.rotation.x = (Math.random() - 0.5) * 0.12;
-      fortuneStand.add(stick);
+    {
+      // 签筒里的 15 支签：原来一支一次 draw，合成一片（石头还是同一材质）
+      const sticksBatch = new StaticBatch();
+      for (let i = 0; i < 15; i++) {
+        const a = (i / 15) * Math.PI * 2;
+        const r = 0.03 + (i % 4) * 0.03;
+        sticksBatch.add(
+          new THREE.CylinderGeometry(0.011, 0.013, 0.46, 5),
+          stickMat,
+          Math.cos(a) * r,
+          1.63 + (i % 5) * 0.012,
+          Math.sin(a) * r,
+          (Math.random() - 0.5) * 0.12,
+          0,
+          (Math.random() - 0.5) * 0.12,
+        );
+      }
+      sticksBatch.build(fortuneStand);
     }
 
     // 牌子：两根柱子 + 横梁 + 竖排「求签」（牌子挂在横梁下，高出签筒，不挡视线）
@@ -1529,10 +2328,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     signBack.position.set(0, 2.6, -0.12);
     fortuneStand.add(signBack);
 
-    // 一盏小小的暖光：夜里也能一眼看到这边
-    const lamp = new THREE.PointLight(0xffb877, 3.4, 5.2, 2);
-    lamp.position.set(0, 2.1, 0.1);
-    fortuneStand.add(lamp);
+    // 这盏小灯不再用真实点光源（远处一眼能看到靠的是下面的地面柔光）
 
     // 地上的一圈柔光：远处也能一眼看到这边有东西
     const glow = new THREE.Mesh(
@@ -1564,7 +2360,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
 
   {
     const bellG = new THREE.Group();
-    bellG.position.set(9.4, 0, -3.2);
+    bellG.position.set(13.2, 0, -3.2);
     const frameTop = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 1.5), matDarkWood);
     frameTop.position.y = 3.2;
     bellG.add(frameTop);
@@ -1593,7 +2389,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     bell.castShadow = true;
     bellG.add(bell);
     group.add(bellG);
-    obstacles.push({ x: 9.4, z: -3.2, r: 0.9 });
+    obstacles.push({ x: 13.2, z: -3.2, r: 0.9 });
   }
 
   // ═══════════════════════════ 庭院 ═══════════════════════════
@@ -1605,6 +2401,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     w.receiveShadow = true;
     w.castShadow = true;
     group.add(w);
+    occluders.push(w);
 
     const cap = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.16, WALL_Z - YARD_Z + 1), matGlazed);
     cap.position.set(sx * WALL_X, YARD_Y + 3.06, (WALL_Z + YARD_Z) / 2);
@@ -1644,6 +2441,16 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     gate.castShadow = true;
     gate.receiveShadow = true;
     group.add(gate);
+    occluders.push(gate);
+
+    // 月洞门中间是空的，相机还是会从洞里退出去；补一块不可见的挡板
+    const camBlock = new THREE.Mesh(
+      new THREE.BoxGeometry(WALL_X * 2, 4.2, 0.2),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
+    camBlock.position.set(0, YARD_Y + 2.1, WALL_Z + 0.3);
+    group.add(camBlock);
+    occluders.push(camBlock);
 
     const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL_X * 2, 0.18, 1.0), matGlazed);
     cap.position.set(0, YARD_Y + 3.45, WALL_Z + 0.35);
@@ -1668,27 +2475,36 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
       [0.3, -1.3, 0.4, 0.9],
       [0.26, 0.35, 1.6, 2.9],
     ];
+    // 一堆松散的石头：合成一片（原来 10 次 draw，现在 1 次）
+    const rocks = new StaticBatch().shadow().receive();
     for (const [r, dx, dz, h] of specs) {
-      const geo = new THREE.DodecahedronGeometry(r * scale, 0);
-      const m = new THREE.Mesh(geo, matRock);
-      m.position.set(dx * scale, h * scale * 0.62, dz * scale);
-      m.scale.set(1, h, 1);
-      m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      g.add(m);
+      rocks.add(
+        new THREE.DodecahedronGeometry(r * scale, 0),
+        matRock,
+        dx * scale,
+        h * scale * 0.62,
+        dz * scale,
+        Math.random() * 3,
+        Math.random() * 3,
+        Math.random() * 3,
+        1,
+        h,
+        1,
+      );
     }
+    rocks.build(g);
     group.add(g);
     obstacles.push({ x: cx, z: cz, r: 2.1 * scale });
   }
 
-  rockery(-8.6, 19.5, 1.25, 0.4);
-  rockery(11.2, 26.5, 1.5, 1.1);
-  rockery(-12.5, 30.5, 0.9, 2.2);
+  rockery(-15.5, 19.0, 1.25, 0.4);
+  rockery(29.6, 31.2, 0.95, 1.1);
+  rockery(-22.0, 30.0, 0.9, 2.2);
+  rockery(25.5, 19.5, 0.8, 2.6);
 
   // 水池
-  const pondX = 8.8;
-  const pondZ = 16.4;
+  const pondX = 13.5;
+  const pondZ = 17.2;
   {
     const bank = new THREE.Mesh(
       new THREE.CircleGeometry(4.1, 32),
@@ -1716,21 +2532,23 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     waterMeshes.push(waterMat);
 
     // 岸石
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2 + Math.random() * 0.2;
-      const rr = 3.5 + Math.random() * 0.5;
-      const rock = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(0.3 + Math.random() * 0.34, 0),
-        matRock,
-      );
-      rock.position.set(
-        pondX + Math.cos(a) * rr,
-        YARD_Y + 0.1 + Math.random() * 0.14,
-        pondZ + Math.sin(a) * rr * 0.76,
-      );
-      rock.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-      rock.castShadow = true;
-      group.add(rock);
+    {
+      const shore = new StaticBatch().shadow();
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + Math.random() * 0.2;
+        const rr = 3.5 + Math.random() * 0.5;
+        shore.add(
+          new THREE.DodecahedronGeometry(0.3 + Math.random() * 0.34, 0),
+          matRock,
+          pondX + Math.cos(a) * rr,
+          YARD_Y + 0.1 + Math.random() * 0.14,
+          pondZ + Math.sin(a) * rr * 0.76,
+          Math.random() * 3,
+          Math.random() * 3,
+          Math.random() * 3,
+        );
+      }
+      shore.build(group);
     }
 
     obstacles.push({ x: pondX, z: pondZ, r: 3.9 });
@@ -1807,60 +2625,271 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   }
 
   // 松树
-  function pine(cx: number, cz: number, s: number) {
-    const g = new THREE.Group();
-    g.position.set(cx, YARD_Y, cz);
-    g.scale.setScalar(s);
+  // 树干 / 树冠都按材质合批：7 棵树原来 42 次 draw，现在 3 次
+  const pineBarkMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2c, roughness: 0.95 });
+  const pineBark = new StaticBatch().shadow();
+  const pineLeaves = new StaticBatch().shadow();
 
-    const trunk = new THREE.Mesh(
+  function pine(cx: number, cz: number, s: number) {
+    pineBark.add(
       new THREE.CylinderGeometry(0.16, 0.26, 2.4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x4a3a2c, roughness: 0.95 }),
+      pineBarkMat,
+      cx,
+      YARD_Y + 1.2 * s,
+      cz,
+      0,
+      0,
+      0,
+      s,
+      s,
+      s,
     );
-    trunk.position.y = 1.2;
-    trunk.castShadow = true;
-    g.add(trunk);
 
     const layers = 5;
     for (let i = 0; i < layers; i++) {
       const t = i / (layers - 1);
       const r = 1.9 * (1 - t * 0.72);
       const y = 1.7 + i * 0.78;
-      const cone = new THREE.Mesh(
+      pineLeaves.add(
         new THREE.ConeGeometry(r, 1.35, 7, 1, true),
         i % 2 === 0 ? matLeaf : matLeafDark,
+        cx,
+        YARD_Y + y * s,
+        cz,
+        0,
+        i * 0.5,
+        0,
+        s,
+        s,
+        s,
       );
-      cone.position.y = y;
-      cone.rotation.y = i * 0.5;
-      cone.castShadow = true;
-      g.add(cone);
     }
 
-    group.add(g);
     obstacles.push({ x: cx, z: cz, r: 1.0 * s });
   }
 
-  pine(-14.2, 14.8, 1.1);
-  pine(-11.6, 25.5, 1.35);
-  pine(13.8, 21.5, 1.0);
-  pine(15.0, 30.0, 1.25);
+  pine(-21.5, 14.8, 1.1);
+  pine(-17.5, 27.0, 1.35);
+  pine(22.5, 22.0, 1.0);
+  pine(29.2, 20.4, 1.1);
   pine(-4.6, 31.5, 0.9);
   pine(-6.5, 40.5, 1.15);
   pine(7.2, 41.5, 1.0);
+  pineBark.build(group);
+  pineLeaves.build(group);
 
-  // 灌木
-  for (const [bx, bz, br] of [
-    [-3.6, 13.6, 0.8],
-    [3.8, 13.4, 0.72],
-    [-15.2, 20.0, 1.0],
-    [6.2, 29.5, 0.9],
-    [-8.0, 15.2, 0.62],
-    [12.4, 33.0, 0.86],
-  ]) {
-    const bush = new THREE.Mesh(new THREE.SphereGeometry(br, 10, 8), matLeaf);
-    bush.scale.set(1.25, 0.72, 1.15);
-    bush.position.set(bx, YARD_Y + br * 0.5, bz);
-    bush.castShadow = true;
-    group.add(bush);
+  // ————————————— 枫树：秋天到了，院子里几株红枫
+  const mapleBarkMat = new THREE.MeshStandardMaterial({ color: 0x4a3326, roughness: 0.95 });
+  const mapleMats = [
+    new THREE.MeshStandardMaterial({ color: 0xb52f1c, roughness: 0.92, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: 0xcf5122, roughness: 0.9, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: 0xd98a2f, roughness: 0.9, flatShading: true }),
+  ];
+  const mapleSpots: Array<{ x: number; z: number; s: number }> = [];
+  const mapleBark = new StaticBatch().shadow();
+  const mapleLeaves = mapleMats.map(() => new StaticBatch().shadow());
+
+  function maple(cx: number, cz: number, s: number) {
+    // 主干
+    mapleBark.add(
+      new THREE.CylinderGeometry(0.13, 0.24, 2.6, 7),
+      mapleBarkMat,
+      cx,
+      YARD_Y + 1.3 * s,
+      cz,
+      0,
+      Math.random() * Math.PI,
+      0.035,
+      s,
+      s,
+      s,
+    );
+
+    // 三根斜枝
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.5;
+      limb(
+        mapleBark,
+        mapleBarkMat,
+        cx,
+        YARD_Y + 2.05 * s,
+        cz,
+        cx + Math.cos(a) * 0.85 * s,
+        YARD_Y + 3.1 * s,
+        cz + Math.sin(a) * 0.85 * s,
+        0.07 * s,
+      );
+    }
+
+    // 树冠：一簇簇的红叶，三色交错
+    const clusters = 20;
+    for (let i = 0; i < clusters; i++) {
+      const a = (i / clusters) * Math.PI * 2 + Math.random() * 0.6;
+      const rr = (0.35 + Math.random() * 1.25) * s;
+      const h = 3.15 + Math.random() * 1.05 - rr * 0.25;
+      const r = (0.42 + Math.random() * 0.3) * s;
+      const mi = i % 3;
+      mapleLeaves[mi].add(
+        new THREE.IcosahedronGeometry(r, 0),
+        mapleMats[mi],
+        cx + Math.cos(a) * rr,
+        YARD_Y + h * s,
+        cz + Math.sin(a) * rr,
+        Math.random() * 3,
+        Math.random() * 3,
+        Math.random() * 3,
+        1.25,
+        0.82,
+        1.25,
+      );
+    }
+
+    obstacles.push({ x: cx, z: cz, r: 0.8 * s });
+    mapleSpots.push({ x: cx, z: cz, s });
+  }
+
+  maple(-7.8, 15.6, 0.85);
+  maple(7.6, 16.2, 0.8);
+  maple(-19.0, 15.2, 1.15);
+  maple(19.5, 15.0, 1.05);
+  maple(-26.5, 24.5, 1.3);
+  maple(9.5, 31.0, 1.0);
+  maple(37.0, 28.5, 1.15);   // 墙外的红枫，越过墙头露出半树
+  maple(-12.0, 32.0, 0.95);
+  // 围墙外再露两株，越过墙头能看到一片红
+  maple(1.0, 39.0, 1.25);
+  maple(-10.0, 40.5, 1.05);
+
+  // 几丛秋色灌木（和枫叶同色系）
+  for (const [bx, bz, br, mi] of [
+    [5.4, 13.8, 0.58, 1],
+    [-5.6, 14.2, 0.52, 2],
+    [-13.5, 17.0, 0.62, 2],
+    [15.8, 30.8, 0.72, 0],
+    [-23.0, 16.5, 0.6, 1],
+    [10.2, 21.0, 0.55, 0],
+    [-9.4, 29.0, 0.6, 1],
+  ] as Array<[number, number, number, number]>) {
+    mapleLeaves[mi].add(
+      new THREE.SphereGeometry(br, 9, 7),
+      mapleMats[mi],
+      bx,
+      YARD_Y + br * 0.5,
+      bz,
+      0,
+      0,
+      0,
+      1.25,
+      0.72,
+      1.15,
+    );
+  }
+
+  mapleBark.build(group);
+  mapleLeaves.forEach((b) => b.build(group));
+
+  // ————————————— 落叶：枫树下一圈，路边和门口再散一些
+  {
+    const leafTex = mapleLeafTexture();
+    const leafMats = [
+      new THREE.MeshStandardMaterial({
+        map: leafTex,
+        transparent: true,
+        alphaTest: 0.35,
+        side: THREE.DoubleSide,
+        roughness: 0.92,
+      }),
+      new THREE.MeshStandardMaterial({
+        map: leafTex,
+        color: 0xe8b06a,
+        transparent: true,
+        alphaTest: 0.35,
+        side: THREE.DoubleSide,
+        roughness: 0.92,
+      }),
+      new THREE.MeshStandardMaterial({
+        map: leafTex,
+        color: 0xa12a18,
+        transparent: true,
+        alphaTest: 0.35,
+        side: THREE.DoubleSide,
+        roughness: 0.92,
+      }),
+    ];
+    const litter = leafMats.map(() => new StaticBatch().receive());
+
+    const dropLeaf = (x: number, z: number, y = YARD_Y + 0.022) => {
+      const mi = Math.floor(Math.random() * 3);
+      const sc = 0.7 + Math.random() * 0.6;
+      litter[mi].add(
+        new THREE.PlaneGeometry(0.22, 0.22),
+        leafMats[mi],
+        x,
+        y,
+        z,
+        -Math.PI / 2,
+        0,
+        Math.random() * Math.PI * 2,
+        sc,
+        sc,
+        sc,
+      );
+    };
+
+    for (const spot of mapleSpots) {
+      const n = Math.round(26 * spot.s);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const rr = (1.2 + Math.random() * 2.9) * spot.s;
+        dropLeaf(spot.x + Math.cos(a) * rr, spot.z + Math.sin(a) * rr);
+      }
+    }
+    // 石板路两侧 + 路面上被踩散的几片
+    for (let i = 0; i < 70; i++) {
+      const side = Math.random() > 0.5 ? 1 : -1;
+      dropLeaf(side * (2.6 + Math.random() * 1.6), 13.2 + Math.random() * 19.5);
+    }
+    for (let i = 0; i < 34; i++) {
+      dropLeaf((Math.random() - 0.5) * 5.0, 14.0 + Math.random() * 18.0);
+    }
+    // 被风吹进殿门口的一层
+    for (let i = 0; i < 4; i++) {
+      dropLeaf(-7.6 + i * 4.2, 8.6 + Math.random() * 1.6);
+    }
+    for (let i = 0; i < 16; i++) {
+      dropLeaf((Math.random() - 0.5) * 12, 8.2 + Math.random() * 1.8, 0.02);
+    }
+    litter.forEach((b) => b.build(group));
+  }
+
+  // 灌木（6 丛 → 1 次 draw）
+  {
+    const bushes = new StaticBatch().shadow();
+    for (const [bx, bz, br] of [
+      [-3.6, 13.6, 0.8],
+      [3.8, 13.4, 0.72],
+      [-25.0, 20.0, 1.0],
+      [6.2, 29.5, 0.9],
+      [-9.5, 15.2, 0.62],
+      [17.5, 32.6, 0.86],
+      [9.6, 13.6, 0.7],
+      [-8.8, 27.5, 0.66],
+    ]) {
+      bushes.add(
+        new THREE.SphereGeometry(br, 10, 8),
+        matLeaf,
+        bx,
+        YARD_Y + br * 0.5,
+        bz,
+        0,
+        0,
+        0,
+        1.25,
+        0.72,
+        1.15,
+      );
+    }
+    bushes.build(group);
   }
 
   // 石灯笼
@@ -1869,19 +2898,14 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     const g = new THREE.Group();
     g.position.set(cx, YARD_Y, cz);
 
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 0.2, 8), matStoneSolid);
-    base.position.y = 0.1;
-    base.castShadow = true;
-    g.add(base);
-
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.78, 8), matStoneSolid);
-    shaft.position.y = 0.58;
-    shaft.castShadow = true;
-    g.add(shaft);
-
-    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.26, 0.12, 8), matStoneSolid);
-    plate.position.y = 1.02;
-    g.add(plate);
+    // 石构件（座/柱/盘/顶/宝珠）合成一片：石灯笼原来 5 次 draw
+    const stone = new StaticBatch().shadow();
+    stone.add(new THREE.CylinderGeometry(0.34, 0.4, 0.2, 8), matStoneSolid, 0, 0.1, 0);
+    stone.add(new THREE.CylinderGeometry(0.12, 0.14, 0.78, 8), matStoneSolid, 0, 0.58, 0);
+    stone.add(new THREE.CylinderGeometry(0.3, 0.26, 0.12, 8), matStoneSolid, 0, 1.02, 0);
+    stone.add(new THREE.ConeGeometry(0.44, 0.26, 8), matStoneSolid, 0, 1.5, 0);
+    stone.add(new THREE.SphereGeometry(0.07, 8, 6), matStoneSolid, 0, 1.66, 0);
+    stone.build(g);
 
     const boxGlow = new THREE.Mesh(
       new THREE.BoxGeometry(0.3, 0.3, 0.3),
@@ -1894,15 +2918,6 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     );
     boxGlow.position.y = 1.23;
     g.add(boxGlow);
-
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(0.44, 0.26, 8), matStoneSolid);
-    roof.position.y = 1.5;
-    roof.castShadow = true;
-    g.add(roof);
-
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), matStoneSolid);
-    tip.position.y = 1.66;
-    g.add(tip);
 
     const spr = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -1936,6 +2951,174 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   stoneLantern(-3.5, 23.4, true);
   stoneLantern(3.5, 23.4, false);
   stoneLantern(-3.5, 31.0, false);
+  stoneLantern(9.0, 20.0, false);
+  stoneLantern(-9.0, 20.0, false);
+
+
+  // ————————————— 钟楼（院落东南角）
+  // 四柱方亭、绿琉璃攒尖顶、白石台基，钟挂在中间的横梁上。
+  {
+    const TX = 22.8;
+    const TZ = 26.6;
+    const g = new THREE.Group();
+    g.position.set(TX, YARD_Y, TZ);
+    group.add(g);
+
+    // 台基铺地：比台基稍大一圈，免得草直接长到台阶根
+    const apronTex = pathTex.clone();
+    apronTex.needsUpdate = true;
+    apronTex.repeat.set(2.6, 2.6);
+    const apron = new THREE.Mesh(
+      new THREE.PlaneGeometry(7.6, 7.6),
+      new THREE.MeshStandardMaterial({ map: apronTex, color: 0xa8a49a, roughness: 0.94 }),
+    );
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.y = 0.012;
+    apron.receiveShadow = true;
+    g.add(apron);
+
+    // 台基：下碱、台帮、白石台面；西面两级踏跺
+    const base = new StaticBatch().shadow().receive();
+    base.add(new THREE.BoxGeometry(6.3, 0.3, 6.3), matStoneSolid, 0, 0.15, 0);
+    base.add(new THREE.BoxGeometry(5.9, 0.42, 5.9), matStoneSolid, 0, 0.51, 0);
+    base.add(new THREE.BoxGeometry(6.1, 0.16, 6.1), matStoneLight, 0, 0.81, 0);
+    base.add(new THREE.BoxGeometry(0.9, 0.3, 2.4), matStoneLight, -3.35, 0.15, 0);
+    base.add(new THREE.BoxGeometry(0.56, 0.56, 2.4), matStoneLight, -3.17, 0.28, 0);
+    // 台面一圈压边
+    base.add(new THREE.BoxGeometry(6.2, 0.08, 0.16), matStoneSolid, 0, 0.93, 3.02);
+    base.add(new THREE.BoxGeometry(6.2, 0.08, 0.16), matStoneSolid, 0, 0.93, -3.02);
+    base.add(new THREE.BoxGeometry(0.16, 0.08, 6.2), matStoneSolid, 3.02, 0.93, 0);
+    base.add(new THREE.BoxGeometry(0.16, 0.08, 6.2), matStoneSolid, -3.02, 0.93, 0);
+    base.build(g);
+
+    // 四根朱红柱 + 柱础 + 斗拱
+    const red = new StaticBatch().shadow();
+    const stoneTrim = new StaticBatch().shadow();
+    const dark = new StaticBatch().shadow();
+    const gold = new StaticBatch().shadow();
+    for (const cx of [-1.85, 1.85]) {
+      for (const cz of [-1.85, 1.85]) {
+        stoneTrim.add(new THREE.CylinderGeometry(0.27, 0.31, 0.18, 14), matStoneLight, cx, 0.98, cz);
+        red.add(new THREE.CylinderGeometry(0.16, 0.19, 3.38, 14), matVermilion, cx, 2.74, cz);
+        red.add(new THREE.BoxGeometry(0.56, 0.14, 0.26), matVermilion, cx, 4.42, cz);
+        red.add(new THREE.BoxGeometry(0.26, 0.14, 0.56), matVermilion, cx, 4.42, cz);
+        dark.add(new THREE.BoxGeometry(0.36, 0.12, 0.36), matDarkWood, cx, 4.3, cz);
+        gold.add(new THREE.BoxGeometry(0.16, 0.1, 0.16), matGold, cx, 4.2, cz);
+      }
+    }
+    // 挂钟的横梁
+    dark.add(new THREE.BoxGeometry(3.7, 0.22, 0.22), matDarkWood, 0, 4.5, 0);
+
+    red.build(g);
+    stoneTrim.build(g);
+    dark.build(g);
+    gold.build(g);
+
+    // 四面彩画额枋
+    {
+      const beamMat = caihuaMat(4.6);
+      const beams = new StaticBatch().shadow();
+      for (const bz of [-1.85, 1.85]) {
+        beams.add(new THREE.BoxGeometry(4.6, 0.38, 0.28), beamMat, 0, 4.62, bz);
+      }
+      for (const bx of [-1.85, 1.85]) {
+        beams.add(new THREE.BoxGeometry(0.28, 0.38, 4.6), beamMat, bx, 4.62, 0);
+      }
+      beams.build(g);
+    }
+
+    // 铜钟：车削出钟形，钟身贴分块铭文
+    {
+      const bellPts = [
+        new THREE.Vector2(0.86, 0),
+        new THREE.Vector2(0.9, 0.1),
+        new THREE.Vector2(0.88, 0.24),
+        new THREE.Vector2(0.8, 0.5),
+        new THREE.Vector2(0.72, 0.85),
+        new THREE.Vector2(0.66, 1.25),
+        new THREE.Vector2(0.62, 1.6),
+        new THREE.Vector2(0.6, 1.85),
+        new THREE.Vector2(0.52, 1.96),
+        new THREE.Vector2(0.34, 2.0),
+      ];
+      const bellTex = bellTexture();
+      const bellMat = new THREE.MeshStandardMaterial({
+        map: bellTex,
+        roughness: 0.42,
+        metalness: 0.72,
+        emissive: 0x17110a,
+        side: THREE.DoubleSide,
+      });
+      const bell = new THREE.Mesh(new THREE.LatheGeometry(bellPts, 32), bellMat);
+      bell.position.y = 1.7;
+      bell.castShadow = true;
+      g.add(bell);
+
+      const bronze = new StaticBatch().shadow();
+      // 钟口、腰部两道箍
+      bronze.add(new THREE.TorusGeometry(0.9, 0.045, 8, 32), matBronzeLit, 0, 1.73, 0, Math.PI / 2);
+      bronze.add(new THREE.TorusGeometry(0.81, 0.028, 6, 28), matBronzeLit, 0, 2.2, 0, Math.PI / 2);
+      bronze.add(new THREE.TorusGeometry(0.64, 0.024, 6, 28), matBronzeLit, 0, 3.18, 0, Math.PI / 2);
+      // 钟顶吊环与吊杆
+      bronze.add(new THREE.TorusGeometry(0.11, 0.035, 8, 16), matBronzeLit, 0, 3.76, 0);
+      bronze.add(new THREE.CylinderGeometry(0.045, 0.045, 0.68, 8), matBronzeLit, 0, 4.06, 0);
+      bronze.build(g);
+    }
+
+    // 绿琉璃攒尖顶 + 四角起翘
+    const roof = hipRoof(3.95, 3.95, 0.12, 0.12, 5.05, 6.95, matGlazed, {
+      segs: 5,
+      sideSegs: 8,
+      cornerLift: 0.62,
+      lip: { h: 0.2, mat: matRidge },
+    });
+    roof.castShadow = true;
+    roof.receiveShadow = true;
+    g.add(roof);
+    occluders.push(roof);
+
+    // 翼角上的小翘头 + 宝顶
+    const roofTrim = new StaticBatch().shadow();
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        roofTrim.add(
+          new THREE.ConeGeometry(0.085, 0.46, 6),
+          matGold,
+          sx * 3.8,
+          5.96,
+          sz * 3.8,
+          sz * 0.4,
+          0,
+          -sx * 0.4,
+        );
+      }
+    }
+    // 宝顶：座 + 两球 + 尖
+    roofTrim.add(new THREE.CylinderGeometry(0.26, 0.3, 0.18, 12), matGold, 0, 7.03, 0);
+    roofTrim.add(new THREE.SphereGeometry(0.2, 14, 10), matGold, 0, 7.23, 0);
+    roofTrim.add(new THREE.SphereGeometry(0.12, 12, 8), matGold, 0, 7.43, 0);
+    roofTrim.add(new THREE.ConeGeometry(0.035, 0.2, 8), matGold, 0, 7.57, 0);
+    roofTrim.build(g);
+
+    // 台前小石碑
+    {
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.96, 0.12), matStoneLight);
+      frame.position.set(-3.42, 0.52, 1.95);
+      frame.rotation.y = -Math.PI / 2;
+      frame.castShadow = true;
+      g.add(frame);
+
+      const steleTex = steleTexture('鐘樓');
+      const steleMat = new THREE.MeshStandardMaterial({ map: steleTex, roughness: 0.9 });
+      const stele = new THREE.Mesh(new THREE.PlaneGeometry(1.34, 0.8), steleMat);
+      stele.position.set(-3.49, 0.52, 1.95);
+      stele.rotation.y = -Math.PI / 2;
+      g.add(stele);
+      obstacles.push({ x: TX - 3.42, z: TZ + 1.95, r: 0.8 });
+    }
+
+    obstacles.push({ x: TX, z: TZ, r: 3.3 });
+  }
 
   // ————————————— 天空
 
@@ -2116,15 +3299,15 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   const sun = new THREE.DirectionalLight(0xffe8c8, 1.85);
   sun.position.set(18, 26, 24);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 120;
-  sun.shadow.camera.left = -26;
-  sun.shadow.camera.right = 26;
-  sun.shadow.camera.top = 32;
-  sun.shadow.camera.bottom = -16;
+  sun.shadow.camera.far = 160;
+  sun.shadow.camera.left = -42;
+  sun.shadow.camera.right = 42;
+  sun.shadow.camera.top = 40;
+  sun.shadow.camera.bottom = -20;
   sun.shadow.bias = -0.0006;
-  sun.shadow.normalBias = 0.04;
+  sun.shadow.normalBias = 0.06;
   scene.add(sun);
 
   // 殿内的补光改成暖色：冷蓝补光会让灰墙显得阴
@@ -2132,8 +3315,8 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   hallFill.position.set(0, CEIL - 1.1, 3.5);
   scene.add(hallFill);
 
-  const altarLight = new THREE.PointLight(0xffb070, 9, 16, 2);
-  altarLight.position.set(0, altarTop + 2.4, altarZ + 2.2);
+  const altarLight = new THREE.PointLight(0xffb070, 11, 18, 1.8);
+  altarLight.position.set(0, altarTop + 3.1, altarZ + 2.6);
   scene.add(altarLight);
 
   const fog = new THREE.FogExp2(0x93a6b8, 0.0085);
@@ -2181,7 +3364,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
   // 只盖庭院与台阶：殿里有屋顶，殿内地面不该积雪
   addSnowPlane(120, 90, 0, YARD_Y + 0.022, 40);
   for (let i = 0; i < 3; i++) {
-    addSnowPlane(20, 0.62, 0, -0.3 * (i + 1) + 0.03, 11.35 + i * 0.6);
+    addSnowPlane(24, 0.62, 0, -0.3 * (i + 1) + 0.03, 11.35 + i * 0.6);
   }
   // 屋顶：克隆屋顶几何，用同一份白雪材质盖上去（polygonOffset 防闪面）
   for (const roof of [roofLower, roofUpper]) {
@@ -2192,7 +3375,7 @@ export function buildTemple(scene: THREE.Scene, renderer: THREE.WebGLRenderer): 
     snowGroup.add(cap);
   }
   {
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(12.62, 0.48, 0.64), snowRoofMat);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(ridgeLen + 0.02, 0.48, 0.64), snowRoofMat);
     cap.position.copy(ridgeBeam.position);
     snowGroup.add(cap);
   }

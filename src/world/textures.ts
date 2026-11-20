@@ -1005,3 +1005,589 @@ export function cofferTexture(): THREE.CanvasTexture {
   t.anisotropy = 4;
   return t;
 }
+
+/** 千手观音的红袍：竖向垂褶 + 金色云纹，下摆一道金边 */
+export function robeTexture(): THREE.CanvasTexture {
+  const W = 192;
+  const H = 512;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#8a2318');
+  g.addColorStop(0.55, '#9c2c1d');
+  g.addColorStop(1, '#6d1710');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // 垂褶：一条条明暗竖纹
+  for (let x = 0; x < W; x += 12) {
+    const f = ctx.createLinearGradient(x, 0, x + 12, 0);
+    f.addColorStop(0, 'rgba(0,0,0,0.2)');
+    f.addColorStop(0.4, 'rgba(255,180,120,0.1)');
+    f.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = f;
+    ctx.fillRect(x, 0, 12, H);
+  }
+
+  // 金色云头
+  ctx.strokeStyle = 'rgba(236, 196, 118, 0.5)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 8; i++) {
+    const x = 16 + ((i * 61) % (W - 32));
+    const y = 80 + ((i * 97) % 310);
+    ctx.beginPath();
+    ctx.arc(x, y, 9, Math.PI * 0.2, Math.PI * 1.0);
+    ctx.arc(x + 9, y, 9, Math.PI * 1.15, Math.PI * 1.95);
+    ctx.stroke();
+  }
+
+  // 下摆金边（v=0 在下）
+  ctx.fillStyle = 'rgba(232, 188, 108, 0.9)';
+  ctx.fillRect(0, H - 16, W, 5);
+  ctx.fillStyle = 'rgba(232, 188, 108, 0.45)';
+  ctx.fillRect(0, H - 8, W, 2);
+
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(3, 1);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/**
+ * 万佛龛：暗红木壁上排满拱形小龛，每龛一尊小金佛 + 一点暖光。
+ *
+ * 大乘之阁东西山墙就是这种万佛龛。这里画成可平铺的贴图，
+ * 一面墙只用一张图，比真挖几百个龛位省得多。
+ */
+export function wanfoNicheTexture(): THREE.CanvasTexture {
+  const S = 512;
+  const [c, ctx] = canvas(S);
+
+  const bg = ctx.createLinearGradient(0, 0, S, 0);
+  bg.addColorStop(0, '#3a0e09');
+  bg.addColorStop(0.5, '#4b140d');
+  bg.addColorStop(1, '#330b07');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, S, S);
+
+  // 竖木纹
+  for (let i = 0; i < 80; i++) {
+    const x = Math.random() * S;
+    ctx.fillStyle = Math.random() > 0.5
+      ? `rgba(255, 190, 130, ${0.01 + Math.random() * 0.03})`
+      : `rgba(0, 0, 0, ${0.03 + Math.random() * 0.08})`;
+    ctx.fillRect(x, 0, 1 + Math.random() * 2, S);
+  }
+
+  const cols = 4;
+  const rows = 4;
+  const cell = S / cols;
+  const nw = cell * 0.64;
+  const nh = cell * 0.78;
+
+  for (let r = 0; r < rows; r++) {
+    for (let q = 0; q < cols; q++) {
+      const cx = q * cell + cell / 2;
+      const top = r * cell + (cell - nh) / 2;
+
+      // 龛内暖光
+      const glow = ctx.createRadialGradient(
+        cx,
+        top + nh * 0.52,
+        3,
+        cx,
+        top + nh * 0.52,
+        nw * 0.62,
+      );
+      glow.addColorStop(0, '#ffe0a4');
+      glow.addColorStop(0.4, '#c9853c');
+      glow.addColorStop(1, '#5c1f0f');
+      ctx.fillStyle = glow;
+
+      // 拱形龛口
+      ctx.beginPath();
+      ctx.moveTo(cx - nw / 2, top + nh);
+      ctx.lineTo(cx - nw / 2, top + nw / 2);
+      ctx.arc(cx, top + nw / 2, nw / 2, Math.PI, 0);
+      ctx.lineTo(cx + nw / 2, top + nh);
+      ctx.closePath();
+      ctx.fill();
+
+      // 龛内的暗影（做出一点进深）
+      const shade = ctx.createLinearGradient(0, top, 0, top + nh);
+      shade.addColorStop(0, 'rgba(0,0,0,0.4)');
+      shade.addColorStop(0.45, 'rgba(0,0,0,0)');
+      ctx.fillStyle = shade;
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(232, 192, 122, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 小金佛：头光 + 头 + 肩身 + 莲座
+      const by = top + nh * 0.66;
+      ctx.fillStyle = 'rgba(255, 214, 140, 0.35)';
+      ctx.beginPath();
+      ctx.arc(cx, by - nw * 0.3, nw * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#f2cd82';
+      ctx.beginPath();
+      ctx.moveTo(cx, by - nw * 0.22);
+      ctx.quadraticCurveTo(cx + nw * 0.28, by - nw * 0.06, cx + nw * 0.24, by + nw * 0.14);
+      ctx.lineTo(cx - nw * 0.24, by + nw * 0.14);
+      ctx.quadraticCurveTo(cx - nw * 0.28, by - nw * 0.06, cx, by - nw * 0.22);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(cx, by - nw * 0.3, nw * 0.105, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = 'rgba(232, 192, 122, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(cx, by + nw * 0.18, nw * 0.27, nw * 0.07, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  noise(ctx, S, 5, 1);
+
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/**
+ * 千手千眼背光：一圈圈向外张开的手臂，掌心各有一只眼。
+ *
+ * 透明底，贴在佛身后的背屏前。中心被佛像挡住，露出来的就是
+ * 最外两三圈手——远看正是普宁寺大佛那种「千手如轮」的光背。
+ */
+export function thousandHandHaloTexture(): THREE.CanvasTexture {
+  const S = 640;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d')!;
+
+  // 光背中心放在画面上部 40% 处：贴图下半截被佛身遮住，手都露在上半圈
+  const cx = S / 2;
+  const cy = S * 0.4;
+
+  // 外层暖金雾
+  const haze = ctx.createRadialGradient(cx, cy, S * 0.08, cx, cy, S * 0.5);
+  haze.addColorStop(0, 'rgba(255, 196, 118, 0.22)');
+  haze.addColorStop(0.55, 'rgba(255, 168, 92, 0.1)');
+  haze.addColorStop(1, 'rgba(255, 150, 70, 0)');
+  ctx.fillStyle = haze;
+  ctx.beginPath();
+  ctx.arc(cx, cy, S * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 几道同心金环
+  ctx.lineWidth = 1.6;
+  const rings: Array<[number, number, number]> = [
+    [0.2, 0.3, 16],
+    [0.3, 0.26, 22],
+    [0.4, 0.2, 28],
+    [0.475, 0.14, 0],
+  ];
+  for (const [rr, aa] of rings) {
+    ctx.strokeStyle = `rgba(238, 194, 116, ${aa})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, S * rr, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const GOLD = 'rgba(228, 168, 84, 0.97)';
+  const GOLD_DIM = 'rgba(188, 128, 58, 0.9)';
+  const INK = 'rgba(78, 24, 8, 0.6)';
+
+  function hand(x: number, y: number, ang: number, sc: number) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.lineCap = 'round';
+
+    // 前臂：先压一道暗红的边，再叠金色，压在红帐上才看得清
+    for (const [w, col] of [
+      [sc * 0.55, INK],
+      [sc * 0.4, GOLD_DIM],
+    ] as Array<[number, string]>) {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(-sc * 2.1, 0);
+      ctx.lineTo(-sc * 0.25, 0);
+      ctx.stroke();
+    }
+
+    // 掌
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.ellipse(sc * 0.28, 0, sc * 0.68, sc * 0.52, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = GOLD;
+    ctx.beginPath();
+    ctx.ellipse(sc * 0.28, 0, sc * 0.62, sc * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 四指 + 拇指
+    const finger = (x0: number, y0: number, cx: number, cy: number, x1: number, y1: number) => {
+      for (const [w, col] of [
+        [sc * 0.27, INK],
+        [sc * 0.17, GOLD],
+      ] as Array<[number, string]>) {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = w;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.quadraticCurveTo(cx, cy, x1, y1);
+        ctx.stroke();
+      }
+    };
+    for (let i = 0; i < 4; i++) {
+      const fy = (i - 1.5) * sc * 0.22;
+      finger(sc * 0.62, fy * 0.55, sc * 1.05, fy * 0.9, sc * 1.22, fy * 1.5);
+    }
+    finger(sc * 0.2, sc * 0.32, sc * 0.55, sc * 0.68, sc * 0.82, sc * 0.6);
+
+    // 掌心的眼
+    ctx.fillStyle = 'rgba(255, 246, 218, 0.95)';
+    ctx.beginPath();
+    ctx.ellipse(sc * 0.3, 0, sc * 0.15, sc * 0.085, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(110, 52, 18, 0.95)';
+    ctx.beginPath();
+    ctx.arc(sc * 0.3, 0, sc * 0.045, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 三圈手：越外圈越多、越大
+  const hands: Array<[number, number, number]> = [
+    [0.225, 14, 0.05],
+    [0.315, 18, 0.054],
+    [0.41, 22, 0.058],
+  ];
+  hands.forEach(([r, n, sc], idx) => {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + idx * 0.12;
+      hand(cx + Math.cos(a) * S * r, cy + Math.sin(a) * S * r, a, S * sc);
+    }
+  });
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** 楹联木牌：深红漆底 + 金框 + 竖排金字 */
+export function coupletTexture(text: string): THREE.CanvasTexture {
+  const chars = Array.from(text);
+  const W = 96;
+  const step = 86;
+  const H = chars.length * step + 56;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+
+  const g = ctx.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, '#5d110c');
+  g.addColorStop(0.45, '#8a1f14');
+  g.addColorStop(1, '#5a100b');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = 'rgba(232, 192, 122, 0.9)';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(7, 7, W - 14, H - 14);
+
+  ctx.fillStyle = '#f0cd85';
+  ctx.font = '62px "Songti SC", "STSong", "SimSun", serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  chars.forEach((ch, i) => ctx.fillText(ch, W / 2, 28 + step / 2 + i * step));
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** 秋天的草地：干黄底 + 赭色草叶 + 零星红叶屑 */
+export function autumnGrassTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const [c, ctx] = canvas(S);
+  ctx.fillStyle = '#6b6136';
+  ctx.fillRect(0, 0, S, S);
+
+  // 干草叶：偏黄、偏赭
+  for (let i = 0; i < 3000; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const r = 110 + Math.random() * 90;
+    const g = 96 + Math.random() * 70;
+    const b = 38 + Math.random() * 42;
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.2 + Math.random() * 0.45})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + (Math.random() - 0.5) * 3, y - 2 - Math.random() * 4);
+    ctx.stroke();
+  }
+
+  // 土色 / 苔痕斑块
+  for (let i = 0; i < 30; i++) {
+    ctx.fillStyle =
+      Math.random() > 0.5
+        ? `rgba(${96 + Math.random() * 40}, ${82 + Math.random() * 36}, 44, 0.15)`
+        : `rgba(58, 66, 40, 0.12)`;
+    ctx.beginPath();
+    ctx.arc(Math.random() * S, Math.random() * S, 8 + Math.random() * 26, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 零星的红色落叶屑
+  for (let i = 0; i < 90; i++) {
+    ctx.fillStyle =
+      Math.random() > 0.45
+        ? `rgba(${150 + Math.random() * 60}, ${40 + Math.random() * 40}, 20, 0.55)`
+        : `rgba(${190 + Math.random() * 40}, ${120 + Math.random() * 50}, 40, 0.45)`;
+    ctx.beginPath();
+    ctx.ellipse(
+      Math.random() * S,
+      Math.random() * S,
+      1.4 + Math.random() * 2.6,
+      0.7 + Math.random() * 1.4,
+      Math.random() * 3,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  }
+  noise(ctx, S, 10, 1);
+
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(10, 10);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** 一片枫叶（透明底），落在地上用 */
+export function mapleLeafTexture(): THREE.CanvasTexture {
+  const S = 96;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d')!;
+  const cx = S / 2;
+  const cy = S * 0.45;
+  const R = S * 0.4;
+
+  // 五裂的叶形：五个尖、五个凹口
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i / 10) * Math.PI * 2;
+    const r = i % 2 === 0 ? R : R * 0.5;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+
+  const g = ctx.createLinearGradient(cx, cy - R, cx, cy + R);
+  g.addColorStop(0, '#e46f2c');
+  g.addColorStop(0.55, '#c93c20');
+  g.addColorStop(1, '#8f2014');
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(92, 22, 10, 0.85)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // 叶脉
+  ctx.strokeStyle = 'rgba(255, 194, 130, 0.4)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + R * 0.15);
+    ctx.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8);
+    ctx.stroke();
+  }
+
+  // 叶柄
+  ctx.strokeStyle = '#7d2a14';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + R * 0.92);
+  ctx.lineTo(cx, cy + R * 1.32);
+  ctx.stroke();
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** 铜钟：八块钟面 + 上下回纹带 + 两面铭文，钟口压暗 */
+export function bellTexture(): THREE.CanvasTexture {
+  const W = 512;
+  const H = 512;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+
+  // v=0 在图的下方（钟口）。钟肩亮一点，钟口沉下去。
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#6d5b3e');
+  g.addColorStop(0.35, '#5b4a31');
+  g.addColorStop(0.72, '#4a3c28');
+  g.addColorStop(1, '#332b1f');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // 铜绿、磨亮的斑
+  for (let i = 0; i < 130; i++) {
+    const x = Math.random() * W;
+    const y = Math.random() * H;
+    const r = 4 + Math.random() * 26;
+    ctx.fillStyle =
+      Math.random() < 0.62 ? 'rgba(96, 118, 94, 0.075)' : 'rgba(214, 186, 126, 0.05)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * (0.5 + Math.random()), Math.random() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 八块钟面的分界
+  const cols = 8;
+  const cw = W / cols;
+  ctx.strokeStyle = 'rgba(28, 22, 14, 0.55)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i <= cols; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * cw, 0);
+    ctx.lineTo(i * cw, H);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(206, 178, 120, 0.16)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < cols; i++) {
+    ctx.strokeRect(i * cw + 6, 26, cw - 12, H - 52);
+  }
+
+  // 上下两圈回纹
+  const meander = (y0: number, h: number) => {
+    ctx.strokeStyle = 'rgba(216, 190, 134, 0.5)';
+    ctx.lineWidth = 2.4;
+    const cell = 28;
+    for (let x = 0; x < W; x += cell) {
+      ctx.beginPath();
+      ctx.moveTo(x + 3, y0 + h - 3);
+      ctx.lineTo(x + 3, y0 + 4);
+      ctx.lineTo(x + cell - 5, y0 + 4);
+      ctx.lineTo(x + cell - 5, y0 + h - 10);
+      ctx.lineTo(x + 9, y0 + h - 10);
+      ctx.lineTo(x + 9, y0 + 12);
+      ctx.stroke();
+    }
+  };
+  meander(62, 30);
+  meander(H - 98, 30);
+
+  // 钟身铭文：两面各四字，竖排
+  const phrases = ['風調雨順', '國泰民安'];
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 26px ui-serif, "Songti SC", "STSong", serif';
+  for (let k = 0; k < 2; k++) {
+    const cx = cw * (k * 4 + 2) + cw / 2;
+    [...phrases[k]].forEach((ch, i) => {
+      ctx.fillStyle = 'rgba(32, 26, 16, 0.6)';
+      ctx.fillText(ch, cx + 1.5, 170 + i * 36 + 1.5);
+      ctx.fillStyle = 'rgba(228, 204, 154, 0.55)';
+      ctx.fillText(ch, cx, 170 + i * 36);
+    });
+  }
+
+  // 钟口压暗
+  const rim = ctx.createLinearGradient(0, H - 28, 0, H);
+  rim.addColorStop(0, 'rgba(24, 20, 14, 0)');
+  rim.addColorStop(1, 'rgba(16, 13, 9, 0.75)');
+  ctx.fillStyle = rim;
+  ctx.fillRect(0, H - 28, W, 28);
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+/** 钟楼前的白石小碑：浅石面、阴刻大字，下面两行小字 */
+export function steleTexture(text: string): THREE.CanvasTexture {
+  const W = 512;
+  const H = 320;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#d6d0c2');
+  g.addColorStop(0.5, '#c8c2b3');
+  g.addColorStop(1, '#b7b1a2');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // 石面麻点
+  for (let i = 0; i < 900; i++) {
+    ctx.fillStyle =
+      Math.random() < 0.7 ? 'rgba(84, 79, 68, 0.07)' : 'rgba(245, 242, 232, 0.1)';
+    const r = 0.6 + Math.random() * 2.2;
+    ctx.beginPath();
+    ctx.arc(Math.random() * W, Math.random() * H, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = 'rgba(92, 86, 72, 0.4)';
+  ctx.lineWidth = 5;
+  ctx.strokeRect(16, 16, W - 32, H - 32);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 104px ui-serif, "Songti SC", "STSong", serif';
+  const chars = [...text];
+  const gap = 138;
+  const top = 132;
+  chars.forEach((ch, i) => {
+    const x = W / 2 + (i - (chars.length - 1) / 2) * gap;
+    ctx.fillStyle = 'rgba(240, 236, 226, 0.55)';
+    ctx.fillText(ch, x + 3, top + 3);
+    ctx.fillStyle = '#33302a';
+    ctx.fillText(ch, x, top);
+  });
+
+  ctx.font = '400 20px ui-serif, "Songti SC", "STSong", serif';
+  ctx.fillStyle = 'rgba(62, 58, 48, 0.62)';
+  ctx.fillText('普寧寺常住', W / 2, 232);
+  ctx.fillText('風調雨順 · 國泰民安', W / 2, 266);
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
